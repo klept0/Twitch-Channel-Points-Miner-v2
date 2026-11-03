@@ -51,7 +51,7 @@ twitch_miner = TwitchChannelPointsMiner(
             token="<PUSHOVER_APP_TOKEN>",                                           # Create a application on the website, and use the token shown in your application
             priority=0,                                                               # Read more about priority here: https://pushover.net/api#priority
             sound="pushover",                                                         # A list of sounds can be found here: https://pushover.net/api#sounds
-            events=[Events.DROP_CLAIM, Events.DROP_STATUS],                          # Only these events will be sent
+            events=[Events.DROP_CLAIM, Events.DROP_STATUS, Events.DROP_UNCLAIMED],   # Only these events will be sent
         )
     ),
     streamer_settings=StreamerSettings(

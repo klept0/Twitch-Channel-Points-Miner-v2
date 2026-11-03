@@ -24,6 +24,7 @@
 > **About this fork.** Based on [rdavydov/Twitch-Channel-Points-Miner-v2](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2). It adds:
 > - **Apprise notifications** in the miner: one `Apprise` notifier reaches Discord, Telegram, Matrix, Pushover, Gotify, ntfy, Slack, email and [100+ more](https://github.com/caronc/apprise/wiki) (upstream request [#823](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/823)).
 > - **An unattended supervisor** for Windows (Task Scheduler), Linux (systemd) and macOS (launchd): auto-update with rollback, restarts, freeze detection, login-code push, health checks and a daily points summary.
+> - **Unclaimed drop alerts**: a notification when a finished drop could not be claimed (drops behind a Connect button are skipped).
 > - A ready-made `run.py` (credentials are placeholders).
 >
 > The Docker image and the sections below the fork notes describe upstream; the upstream Docker image does not include these additions.
@@ -44,6 +45,9 @@ logger_settings=LoggerSettings(
 )
 ```
 `apprise` is in `requirements.txt`. URL formats for every service: https://github.com/caronc/apprise/wiki
+
+### Unclaimed drop alerts (miner)
+Every 30 minutes the miner claims finished drops from your inventory. If a claim fails, it logs one `Events.DROP_UNCLAIMED` message per drop with a link to https://www.twitch.tv/drops/inventory. Campaigns that need a linked game account (Twitch shows **Connect** instead of **Claim**) are skipped. Add `Events.DROP_UNCLAIMED` to a notifier's `events` to get it on your phone.
 
 ### Supervisor files (`TaskScripts/`)
 | File | Platform | Purpose |
@@ -649,6 +653,7 @@ Webhook(
  - `JOIN_RAID`
  - `DROP_CLAIM`
  - `DROP_STATUS`
+ - `DROP_UNCLAIMED`: a finished drop could not be claimed (campaigns that need an account connection are skipped)
  - `CHAT_MENTION`
 
 ### StreamerSettings
