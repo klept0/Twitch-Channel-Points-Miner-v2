@@ -20,6 +20,47 @@
 
 <h1 align="center">https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2</h1>
 
+> [!NOTE]
+> **About this fork (klept0).** The miner code is unchanged from upstream. This fork adds a ready-made `run.py` and a set of Windows scripts that run the miner unattended through Task Scheduler. See [MODS.md](MODS.md) for a file list.
+
+## Fork additions: Windows supervisor
+
+| File | Purpose |
+|------|---------|
+| `run.py` | Example config (drops/streak priority, predictions, Pushover events). Credentials are placeholders: set `username`; `password=None` prompts on first login. |
+| `TaskScripts/MinerTask.ps1` | Installer and control script. Registers and manages three scheduled tasks. |
+| `TaskScripts/MinerSupervisor.ps1` | Long-running supervisor that starts, watches, updates and restarts the miner. |
+| `TaskScripts/miner_wrapper.py` | Python launcher the supervisor uses to run `run.py` hidden with captured output. |
+| `TaskScripts/miner-alerts.example.json` | Pushover template. Copy to `miner-alerts.json` and fill in your keys. |
+
+### What the supervisor does
+- Checks upstream for updates every 24 h, fast-forwards the checkout and reinstalls `requirements.txt` only when it changed.
+- Rolls back a bad update: if a new commit crashes 3 times within 30 min, it resets to the last good commit and skips the bad one.
+- Restarts gracefully every 24 h, on crash (backoff from 30 s up to 15 min), and when the log stops growing for 20 min.
+- Handles Twitch login: moves a rejected cookie aside, and pushes the `twitch.tv/activate` code to your phone.
+- Writes `supervisor-logs/status.json` every minute and sends Pushover alerts when `miner-alerts.json` exists.
+- Works on Windows PowerShell 5.1 and PowerShell 7. Refuses to run twice.
+
+### Setup (Windows)
+1. Clone the miner to `%USERPROFILE%\Scripting\Twitch-Channel-Points-Miner-v2` (or pass `-MinerDir`) and install `requirements.txt`.
+2. Edit `run.py`: set your Twitch `username` and streamers. Keep `emoji=False` on Windows.
+3. Optional: copy `TaskScripts/miner-alerts.example.json` to `miner-alerts.json` and add your Pushover token and user key.
+4. In an admin PowerShell, run `.\TaskScripts\MinerTask.ps1`. It finds Python, checks the login cookie, and registers the supervisor, a 30-minute health check and a daily points summary.
+
+### Commands
+```powershell
+.\TaskScripts\MinerTask.ps1 -Action Health                      # HEALTHY / WARNING / DOWN (exit 0/1/2)
+.\TaskScripts\MinerTask.ps1 -Action Summary -SummaryHours 168   # points, bets and uptime for the last 7 days
+.\TaskScripts\MinerTask.ps1 -Action TestAlert                   # send a test Pushover notification
+.\TaskScripts\MinerTask.ps1 -Action Start | Stop | Uninstall    # admin
+```
+`-LogonMode` picks how the tasks run: `Password` (default, runs at boot), `S4U` (no stored password; may not work with Microsoft accounts) or `AtLogon`.
+
+> [!WARNING]
+> Never commit your real `run.py` password, `miner-alerts.json`, or the `cookies/` folder. `miner-alerts.json` is not tracked in this repo.
+
+---
+
 **Credits**
 - Main idea: https://github.com/gottagofaster236/Twitch-Channel-Points-Miner
 - ~~Bet system (Selenium): https://github.com/ClementRoyer/TwitchAutoCollect-AutoBet~~
