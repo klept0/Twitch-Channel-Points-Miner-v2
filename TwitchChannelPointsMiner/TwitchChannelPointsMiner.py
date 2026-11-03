@@ -182,6 +182,7 @@ class TwitchChannelPointsMiner:
         port: int = 5000,
         refresh: int = 5,
         days_ago: int = 7,
+        auth: tuple = None,
     ):
         # Analytics switch
         if Settings.enable_analytics is True:
@@ -194,6 +195,7 @@ class TwitchChannelPointsMiner:
                 refresh=refresh,
                 days_ago=days_ago,
                 username=self.username,
+                auth=auth,
             )
             http_server.daemon = True
             http_server.name = "Analytics Thread"
@@ -415,7 +417,7 @@ class TwitchChannelPointsMiner:
     def end(self, signum, frame):
         if not self.running:
             return
-        
+
         logger.info("CTRL+C Detected! Please wait just a moment!")
 
         for streamer in self.streamers:
@@ -494,19 +496,19 @@ class TwitchChannelPointsMiner:
                     self.streamers[streamer_index].channel_points
                     - self.original_streamers[streamer_index]
                 )
-                
+
                 from colorama import Fore
                 streamer_highlight = Fore.YELLOW
-                
+
                 streamer_gain = (
                     f"{streamer_highlight}{self.streamers[streamer_index]}{Fore.RESET}, Total Points Gained: {_millify(gained)}"
                     if Settings.logger.less
                     else f"{streamer_highlight}{repr(self.streamers[streamer_index])}{Fore.RESET}, Total Points Gained (after farming - before farming): {_millify(gained)}"
                 )
-                
+
                 indent = ' ' * 25
                 streamer_history = '\n'.join(f"{indent}{history}" for history in self.streamers[streamer_index].print_history().split('; ')) 
-                
+
                 logger.info(
                     f"{streamer_gain}\n{streamer_history}",
                     extra={"emoji": ":moneybag:"},

@@ -98,8 +98,8 @@ $(document).ready(function () {
     // Variable to keep track of whether auto-update log is active
     var autoUpdateLog = true;
 
-    // Variable to keep track of the last received log index
-    var lastReceivedLogIndex = 0;
+    // Byte offset of the log file the page has shown up to (sent back by the server)
+    var logOffset = 0;
 
     $('#auto-update-log').click(() => {
         autoUpdateLog = !autoUpdateLog;
@@ -113,14 +113,16 @@ $(document).ready(function () {
     // Function to get the full log content
     function getLog() {
         if (isLogCheckboxChecked) {
-            $.get(`/log?lastIndex=${lastReceivedLogIndex}`, function (data) {
+            $.get(`/log?offset=${logOffset}`, function (data, status, xhr) {
+                // Start over on first load or when the log file was rotated
+                if (xhr.getResponseHeader("X-Log-Reset") === "1") $("#log-content").empty();
                 // Process and display the new log entries received
                 $("#log-content").append(data);
                 // Scroll to the bottom of the log content
                 $("#log-content").scrollTop($("#log-content")[0].scrollHeight);
 
-                // Update the last received log index
-                lastReceivedLogIndex += data.length;
+                // Continue from where this response ended
+                logOffset = parseInt(xhr.getResponseHeader("X-Log-Offset")) || 0;
 
                 if (autoUpdateLog) {
                     // Call getLog() again after a certain interval (e.g., 1 second)
