@@ -1,0 +1,5 @@
+{
+  "pushoverToken": "<APP_TOKEN>",
+  "pushoverUser": "<USER_KEY>",
+  "device": ""
+}
