@@ -308,7 +308,7 @@ all watch streaks are caught.
 | Value | Watches first |
 | :-- | :-- |
 | `STREAK` | Streamers whose watch streak can still be caught |
-| `DROPS` | Streamers with a drop campaign you can progress by watching (subscription-only and already claimed drops don't count; for opt-in quests such as Pokémon Evolutions only the lane you picked on Twitch counts, until that day's watch time is done); those with a drop that can still be finished before it ends come first |
+| `DROPS` | Streamers with a drop campaign you can progress by watching (subscription-only and already claimed drops don't count); those with a drop that can still be finished before it ends come first |
 | `SUBSCRIBED` | Streamers you are subscribed to (higher tiers first) |
 | `ORDER` | The order of your streamer list |
 | `POINTS_ASCENDING` | Streamers where you have the fewest points |

@@ -24,11 +24,7 @@ from typing import Dict, Any
 # from base64 import urlsafe_b64decode
 # from datetime import datetime
 
-from TwitchChannelPointsMiner.classes.entities.Campaign import (
-    Campaign,
-    parse_datetime,
-    utc_now,
-)
+from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign, parse_datetime
 from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoal
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
 from TwitchChannelPointsMiner.classes.Exceptions import (
@@ -1008,7 +1004,7 @@ class Twitch(object):
     @staticmethod
     def __campaign_from_channel_progress(campaign):
         """Converts a DropChannelCampaignsProgress campaign to the DropCampaignDetails
-        shape used by Campaign, keeping only unclaimed watch-time drops that can progress now (track/lane drops only on the lane the viewer picked).
+        shape used by Campaign, keeping only unclaimed watch-time drops.
         Returns None when nothing on it can be earned by watching."""
         # Raises ValueError on an unexpected date format; the caller skips the campaign
         parse_datetime(campaign["startAt"])
@@ -1018,27 +1014,15 @@ class Twitch(object):
         for group in campaign.get("rewardGroups") or []:
             criteria = group.get("progressCriteria") or {}
             minutes = (criteria.get("requirements") or {}).get("minutesWatched")
-            progress = group.get("self") or {}
-            status = progress.get("status")
+            status = (group.get("self") or {}).get("status")
             if (
                 criteria.get("requirementType") != "WATCH"
                 or not minutes
+                or group.get("track") is not None
+                or group.get("lane") is not None
                 or status in ["CLAIMED", "COMPLETED"]
-                # Opt-in drops (e.g. track/lane): only the picked lane progresses
-                or (
-                    criteria.get("isAutoProgressable") is False
-                    and status != "IN_PROGRESS"
-                )
             ):
                 continue
-            # Repeatable drops: today's window is already done
-            next_eligible_at = progress.get("nextEligibleAt")
-            if next_eligible_at:
-                try:
-                    if parse_datetime(next_eligible_at) > utc_now():
-                        continue
-                except ValueError:
-                    pass
             if criteria.get("channels"):
                 channels = (channels or []) + [
                     channel
@@ -1061,20 +1045,6 @@ class Twitch(object):
                         }
                         for reward in group.get("rewards") or []
                     ],
-                    # Progress in the inventory "self" shape, applied by sync_campaigns
-                    "self": (
-                        {
-                            "hasPreconditionsMet": True,
-                            "currentMinutesWatched": progress.get(
-                                "currentMinutesWatched"
-                            )
-                            or 0,
-                            "dropInstanceID": None,
-                            "isClaimed": False,
-                        }
-                        if progress
-                        else None
-                    ),
                 }
             )
         if not drops:
@@ -1344,17 +1314,6 @@ class Twitch(object):
                     for index in range(0, len(campaigns_details)):
                         if campaigns_details[index] is not None:
                             campaign = Campaign(campaigns_details[index])
-                            # Apply known progress (channel campaigns are not in the
-                            # inventory, so __sync_campaigns never updates them)
-                            for drop, drop_dict in zip(
-                                campaign.drops,
-                                campaigns_details[index].get("timeBasedDrops") or [],
-                            ):
-                                if (
-                                    drop_dict.get("self")
-                                    and drop.drop_instance_id is None
-                                ):
-                                    drop.update(drop_dict["self"])
                             if campaign.dt_match is True:
                                 # Remove all the drops already claimed or with dt not matching
                                 campaign.clear_drops()
@@ -1375,14 +1334,10 @@ class Twitch(object):
                         streamers[i].stream.campaigns = list(
                             filter(
                                 lambda x: x.drops != []
-                                and x.id in streamers[i].stream.campaigns_ids
-                                # Campaigns without a game (category-wide, e.g.
-                                # track/lane) are scoped to the channel by Twitch
-                                and (
-                                    (x.game or {}).get("id") is None
-                                    or (x.game or {}).get("id")
-                                    == (streamers[i].stream.game or {}).get("id")
-                                ),
+                                and (x.game or {}).get("id") is not None
+                                and (x.game or {}).get("id")
+                                == (streamers[i].stream.game or {}).get("id")
+                                and x.id in streamers[i].stream.campaigns_ids,
                                 campaigns,
                             )
                         )
