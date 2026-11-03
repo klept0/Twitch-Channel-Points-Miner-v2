@@ -7,6 +7,7 @@ Used by the Windows PowerShell scripts so they get Apprise support too.
 
 Exit codes: 0 sent, 3 nothing configured, 1 delivery error.
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -25,7 +26,14 @@ def main() -> int:
     a = ap.parse_args()
     msg = sys.stdin.buffer.read().decode("utf-8", errors="replace").strip()
     try:
-        sent = send_alert(msg, priority=a.priority, title=a.title, mono=a.mono, url=a.url, url_title=a.url_title)
+        sent = send_alert(
+            msg,
+            priority=a.priority,
+            title=a.title,
+            mono=a.mono,
+            url=a.url,
+            url_title=a.url_title,
+        )
     except Exception as e:
         print(f"notify.py: {e}", file=sys.stderr)
         return 1

@@ -83,7 +83,7 @@ class LoggerSettings:
         "pushover",
         "gotify",
         "apprise",
-        "username"
+        "username",
     ]
 
     def __init__(
@@ -105,7 +105,7 @@ class LoggerSettings:
         pushover: Pushover or None = None,
         gotify: Gotify or None = None,
         apprise: Apprise or None = None,
-        username: str or None = None
+        username: str or None = None,
     ):
         self.save = save
         self.less = less

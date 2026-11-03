@@ -18,6 +18,7 @@ and macOS (launchd). The Python counterpart of MinerTask.ps1.
 
 Linux: run `loginctl enable-linger $USER` (install tries it) so the jobs run without you logged in.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,9 +35,24 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from miner_common import (  # noqa: E402
-    ALERT_CONFIG, SCRIPT_DIR, WRAPPER, Paths, default_miner_dir, find_python, format_age, iso,
-    load_alert_config, newest_log, now, parse_time, pid_alive, read_json, rss_mb, send_alert,
-    tail_lines, write_json,
+    ALERT_CONFIG,
+    SCRIPT_DIR,
+    WRAPPER,
+    Paths,
+    default_miner_dir,
+    find_python,
+    format_age,
+    iso,
+    load_alert_config,
+    newest_log,
+    now,
+    parse_time,
+    pid_alive,
+    read_json,
+    rss_mb,
+    send_alert,
+    tail_lines,
+    write_json,
 )
 
 SUPERVISOR = SCRIPT_DIR / "miner_supervisor.py"
@@ -48,16 +64,29 @@ IS_LINUX = platform.system() == "Linux"
 
 # ---------------------------------------------------------------- service backends
 class Systemd:
-    unit_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "systemd" / "user"
+    unit_dir = (
+        Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        / "systemd"
+        / "user"
+    )
     sup = f"{LABEL}-supervisor.service"
     health = f"{LABEL}-health"
     summary = f"{LABEL}-summary"
 
     @staticmethod
     def ctl(*a: str, check: bool = False) -> subprocess.CompletedProcess:
-        return subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True, check=check)
+        return subprocess.run(
+            ["systemctl", "--user", *a], capture_output=True, text=True, check=check
+        )
 
-    def install(self, python: str, miner_dir: Path, health_minutes: int, summary_time: str, summary_hours: int) -> None:
+    def install(
+        self,
+        python: str,
+        miner_dir: Path,
+        health_minutes: int,
+        summary_time: str,
+        summary_hours: int,
+    ) -> None:
         self.unit_dir.mkdir(parents=True, exist_ok=True)
         hh, mm = summary_time.split(":")
         q = lambda p: f'"{p}"'  # noqa: E731
@@ -120,18 +149,44 @@ class Systemd:
                 """,
         }
         for name, body in units.items():
-            (self.unit_dir / name).write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
+            (self.unit_dir / name).write_text(
+                textwrap.dedent(body).lstrip(), encoding="utf-8"
+            )
         self.ctl("daemon-reload", check=True)
-        self.ctl("enable", "--now", self.sup, f"{self.health}.timer", f"{self.summary}.timer", check=True)
-        r = subprocess.run(["loginctl", "enable-linger", getpass.getuser()], capture_output=True, text=True)
+        self.ctl(
+            "enable",
+            "--now",
+            self.sup,
+            f"{self.health}.timer",
+            f"{self.summary}.timer",
+            check=True,
+        )
+        r = subprocess.run(
+            ["loginctl", "enable-linger", getpass.getuser()],
+            capture_output=True,
+            text=True,
+        )
         if r.returncode != 0:
-            print(f"! Could not enable lingering ({r.stderr.strip()}). Without it the miner stops when you log out.\n"
-                  f"  Run: sudo loginctl enable-linger {getpass.getuser()}")
+            print(
+                f"! Could not enable lingering ({r.stderr.strip()}). Without it the miner stops when you log out.\n"
+                f"  Run: sudo loginctl enable-linger {getpass.getuser()}"
+            )
 
     def uninstall(self) -> None:
-        self.ctl("disable", "--now", self.sup, f"{self.health}.timer", f"{self.summary}.timer")
-        for name in (self.sup, f"{self.health}.service", f"{self.health}.timer",
-                     f"{self.summary}.service", f"{self.summary}.timer"):
+        self.ctl(
+            "disable",
+            "--now",
+            self.sup,
+            f"{self.health}.timer",
+            f"{self.summary}.timer",
+        )
+        for name in (
+            self.sup,
+            f"{self.health}.service",
+            f"{self.health}.timer",
+            f"{self.summary}.service",
+            f"{self.summary}.timer",
+        ):
             (self.unit_dir / name).unlink(missing_ok=True)
         self.ctl("daemon-reload")
 
@@ -185,34 +240,63 @@ class Launchd:
 """
 
     def bootstrap(self, label: str) -> None:
-        subprocess.run(["launchctl", "bootout", f"{self.domain}/{label}"], capture_output=True)
-        subprocess.run(["launchctl", "bootstrap", self.domain, str(self.plist(label))], check=True)
+        subprocess.run(
+            ["launchctl", "bootout", f"{self.domain}/{label}"], capture_output=True
+        )
+        subprocess.run(
+            ["launchctl", "bootstrap", self.domain, str(self.plist(label))], check=True
+        )
 
-    def install(self, python: str, miner_dir: Path, health_minutes: int, summary_time: str, summary_hours: int) -> None:
+    def install(
+        self,
+        python: str,
+        miner_dir: Path,
+        health_minutes: int,
+        summary_time: str,
+        summary_hours: int,
+    ) -> None:
         self.agent_dir.mkdir(parents=True, exist_ok=True)
         log_dir = Paths(miner_dir).log_dir
         log_dir.mkdir(parents=True, exist_ok=True)
         hh, mm = summary_time.split(":")
         jobs = {
-            self.sup: ([python, str(SUPERVISOR), "--miner-dir", str(miner_dir)],
-                       "    <key>RunAtLoad</key><true/>\n    <key>KeepAlive</key><true/>\n"
-                       "    <key>ThrottleInterval</key><integer>300</integer>\n"
-                       "    <key>ExitTimeOut</key><integer>180</integer>"),
-            self.health: ([python, str(CTL), "health", "--notify", "--miner-dir", str(miner_dir)],
-                          f"    <key>StartInterval</key><integer>{health_minutes * 60}</integer>"),
-            self.summary: ([python, str(CTL), "summary", "--notify", "--hours", str(summary_hours),
-                            "--miner-dir", str(miner_dir)],
-                           "    <key>StartCalendarInterval</key>\n    <dict><key>Hour</key>"
-                           f"<integer>{int(hh)}</integer><key>Minute</key><integer>{int(mm)}</integer></dict>"),
+            self.sup: (
+                [python, str(SUPERVISOR), "--miner-dir", str(miner_dir)],
+                "    <key>RunAtLoad</key><true/>\n    <key>KeepAlive</key><true/>\n"
+                "    <key>ThrottleInterval</key><integer>300</integer>\n"
+                "    <key>ExitTimeOut</key><integer>180</integer>",
+            ),
+            self.health: (
+                [python, str(CTL), "health", "--notify", "--miner-dir", str(miner_dir)],
+                f"    <key>StartInterval</key><integer>{health_minutes * 60}</integer>",
+            ),
+            self.summary: (
+                [
+                    python,
+                    str(CTL),
+                    "summary",
+                    "--notify",
+                    "--hours",
+                    str(summary_hours),
+                    "--miner-dir",
+                    str(miner_dir),
+                ],
+                "    <key>StartCalendarInterval</key>\n    <dict><key>Hour</key>"
+                f"<integer>{int(hh)}</integer><key>Minute</key><integer>{int(mm)}</integer></dict>",
+            ),
         }
         for label, (args, extra) in jobs.items():
-            self.plist(label).write_text(self._plist(label, args, log_dir, extra), encoding="utf-8")
+            self.plist(label).write_text(
+                self._plist(label, args, log_dir, extra), encoding="utf-8"
+            )
             self.bootstrap(label)
         print("Note: the jobs run while you are logged in to this Mac (LaunchAgents).")
 
     def uninstall(self) -> None:
         for label in (self.sup, self.health, self.summary):
-            subprocess.run(["launchctl", "bootout", f"{self.domain}/{label}"], capture_output=True)
+            subprocess.run(
+                ["launchctl", "bootout", f"{self.domain}/{label}"], capture_output=True
+            )
             self.plist(label).unlink(missing_ok=True)
 
     def start(self) -> None:
@@ -222,12 +306,18 @@ class Launchd:
 
     def stop(self) -> None:
         # KeepAlive would restart a killed supervisor, so unload it; `start` loads it again.
-        subprocess.run(["launchctl", "bootout", f"{self.domain}/{self.sup}"], capture_output=True)
+        subprocess.run(
+            ["launchctl", "bootout", f"{self.domain}/{self.sup}"], capture_output=True
+        )
 
     def state(self) -> tuple[bool | None, str]:
         if not self.plist(self.sup).exists():
             return None, f"launchd agent '{self.sup}' not installed"
-        r = subprocess.run(["launchctl", "print", f"{self.domain}/{self.sup}"], capture_output=True, text=True)
+        r = subprocess.run(
+            ["launchctl", "print", f"{self.domain}/{self.sup}"],
+            capture_output=True,
+            text=True,
+        )
         if r.returncode != 0:
             return False, f"launchd agent '{self.sup}' is not loaded"
         m = re.search(r"^\s*state = (\S+)", r.stdout, re.M)
@@ -240,14 +330,18 @@ def backend():
         return Launchd()
     if IS_LINUX and shutil.which("systemctl"):
         return Systemd()
-    sys.exit("Unsupported platform: needs Linux with systemd, or macOS. On Windows use MinerTask.ps1.")
+    sys.exit(
+        "Unsupported platform: needs Linux with systemd, or macOS. On Windows use MinerTask.ps1."
+    )
 
 
 # ---------------------------------------------------------------- health
 def get_health(p: Paths) -> dict:
     down, warn, note, info = [], [], [], []
 
-    running, desc = backend().state() if (IS_MAC or IS_LINUX) else (None, "no service manager")
+    running, desc = (
+        backend().state() if (IS_MAC or IS_LINUX) else (None, "no service manager")
+    )
     if running is None:
         down.append(desc + ".")
     elif not running:
@@ -259,36 +353,50 @@ def get_health(p: Paths) -> dict:
     else:
         hb = parse_time(st.get("heartbeat"))
         if not hb or now() - hb > timedelta(minutes=3):
-            down.append(f"Supervisor heartbeat is stale (last {format_age(hb)} ago) - hung or dead.")
+            down.append(
+                f"Supervisor heartbeat is stale (last {format_age(hb)} ago) - hung or dead."
+            )
         elif not pid_alive(st.get("supervisorPid")):
             down.append(f"Supervisor PID {st.get('supervisorPid')} is gone.")
-        info.append(f"Supervisor: PID {st.get('supervisorPid')}, up {format_age(parse_time(st.get('supervisorStarted')))}, "
-                    f"heartbeat {format_age(hb)} ago")
+        info.append(
+            f"Supervisor: PID {st.get('supervisorPid')}, up {format_age(parse_time(st.get('supervisorStarted')))}, "
+            f"heartbeat {format_age(hb)} ago"
+        )
 
         state = st.get("minerState")
         if state == "running":
             mp = st.get("minerPid")
             if pid_alive(mp):
                 ram = rss_mb(mp)
-                info.append(f"Miner: running, PID {mp}, up {format_age(parse_time(st.get('minerStarted')))}"
-                            + (f", RAM {ram} MB" if ram is not None else ""))
+                info.append(
+                    f"Miner: running, PID {mp}, up {format_age(parse_time(st.get('minerStarted')))}"
+                    + (f", RAM {ram} MB" if ram is not None else "")
+                )
             else:
                 down.append(f"Miner PID {mp} is not running.")
         elif state == "crashed-waiting":
             since = parse_time(st.get("lastExitTime"))
             msg = f"Miner crashed (exit {st.get('lastExitCode')}) {format_age(since)} ago, waiting to restart."
-            (down if since and now() - since > timedelta(minutes=20) else warn).append(msg)
+            (down if since and now() - since > timedelta(minutes=20) else warn).append(
+                msg
+            )
         elif state == "restarting":
             info.append("Miner: in its scheduled restart.")
         else:
             down.append(f"Miner state: {state}.")
 
         cutoff = now() - timedelta(hours=24)
-        recent = [c for c in (st.get("crashes") or []) if c and (parse_time(c.get("time")) or cutoff) > cutoff]
+        recent = [
+            c
+            for c in (st.get("crashes") or [])
+            if c and (parse_time(c.get("time")) or cutoff) > cutoff
+        ]
         if recent:
             last = recent[-1]
-            line = (f"{len(recent)} crash(es) in the last 24 h - last: exit {last.get('exitCode')} after "
-                    f"{last.get('ranMinutes')} min, {format_age(parse_time(last.get('time')))} ago.")
+            line = (
+                f"{len(recent)} crash(es) in the last 24 h - last: exit {last.get('exitCode')} after "
+                f"{last.get('ranMinutes')} min, {format_age(parse_time(last.get('time')))} ago."
+            )
             (warn if len(recent) >= 3 else note).append(line)
 
         uc = parse_time(st.get("lastUpdateCheck"))
@@ -303,32 +411,54 @@ def get_health(p: Paths) -> dict:
             rb_time, _, rb_what = str(st["lastRollback"]).partition("|")
             rbt = parse_time(rb_time)
             if rbt and rbt > cutoff:
-                warn.append(f"Bad update rolled back {format_age(rbt)} ago ({rb_what}).")
+                warn.append(
+                    f"Bad update rolled back {format_age(rbt)} ago ({rb_what})."
+                )
         if st.get("loginNeeded"):
             warn.append(f"Twitch login: {st['loginNeeded']}")
 
         la = parse_time(st.get("lastLogActivity"))
         if la:
-            dbg = {True: "DEBUG level, freeze auto-restart on", False: "INFO level, freeze auto-restart off"}.get(
-                st.get("logIsDebug"), "level not checked yet")
+            dbg = {
+                True: "DEBUG level, freeze auto-restart on",
+                False: "INFO level, freeze auto-restart off",
+            }.get(st.get("logIsDebug"), "level not checked yet")
             info.append(f"Miner log last grew {format_age(la)} ago ({dbg})")
-            if now() - la > timedelta(hours=2) and state == "running" and not st.get("loginNeeded"):
-                warn.append(f"Miner log hasn't grown for {format_age(la)} - it may be frozen.")
-        info.append(f"Version: {st.get('version')} (good: {st.get('goodCommit')}) | Restarts: "
-                    f"{st.get('scheduledRestarts')} scheduled, {st.get('stallRestarts')} freeze | "
-                    f"Graceful stop: {st.get('gracefulStop')}")
+            if (
+                now() - la > timedelta(hours=2)
+                and state == "running"
+                and not st.get("loginNeeded")
+            ):
+                warn.append(
+                    f"Miner log hasn't grown for {format_age(la)} - it may be frozen."
+                )
+        info.append(
+            f"Version: {st.get('version')} (good: {st.get('goodCommit')}) | Restarts: "
+            f"{st.get('scheduledRestarts')} scheduled, {st.get('stallRestarts')} freeze | "
+            f"Graceful stop: {st.get('gracefulStop')}"
+        )
         info.append(f"Python: {st.get('pythonExe')}")
 
-    err_re = re.compile(r"Traceback \(most recent call last\)|^\s*[\w.]+(Error|Exception)\b|\b(ERROR|CRITICAL)\b")
+    err_re = re.compile(
+        r"Traceback \(most recent call last\)|^\s*[\w.]+(Error|Exception)\b|\b(ERROR|CRITICAL)\b"
+    )
     errs = [ln for ln in tail_lines(p.err_log, 500) if err_re.search(ln)]
     if errs:
-        note.append(f"miner-stderr.log: {len(errs)} error line(s) this run. Latest: {errs[-1].strip()}")
+        note.append(
+            f"miner-stderr.log: {len(errs)} error line(s) this run. Latest: {errs[-1].strip()}"
+        )
 
     latest = newest_log(p.miner_log_dir)
     if latest:
-        log_errs = [ln for ln in tail_lines(latest, 1000) if re.search(r" - (ERROR|CRITICAL) - ", ln)]
+        log_errs = [
+            ln
+            for ln in tail_lines(latest, 1000)
+            if re.search(r" - (ERROR|CRITICAL) - ", ln)
+        ]
         if log_errs:
-            note.append(f"{latest.name}: {len(log_errs)} ERROR line(s) in the last 1000. Latest: {log_errs[-1].strip()}")
+            note.append(
+                f"{latest.name}: {len(log_errs)} ERROR line(s) in the last 1000. Latest: {log_errs[-1].strip()}"
+            )
 
     verdict = "DOWN" if down else "WARNING" if warn else "HEALTHY"
     return {"verdict": verdict, "down": down, "warn": warn, "note": note, "info": info}
@@ -343,7 +473,9 @@ def cmd_health(p: Paths, notify: bool) -> int:
         cfg = load_alert_config() or {}
         down_prio = int(cfg.get("downPriority", 2))
         send = h["verdict"] != prev_verdict or (
-            h["verdict"] == "DOWN" and (not last_sent or now() - last_sent >= timedelta(hours=6)))
+            h["verdict"] == "DOWN"
+            and (not last_sent or now() - last_sent >= timedelta(hours=6))
+        )
         if send:
             lines = h["down"] + h["warn"]
             if h["verdict"] == "DOWN":
@@ -352,14 +484,22 @@ def cmd_health(p: Paths, notify: bool) -> int:
                 title, prio, body = "Miner warning", 0, "\n".join(lines)
             else:
                 title, prio = "Miner recovered", -1
-                body = f"Back to healthy (was {prev_verdict}).\n" + "\n".join(h["info"][:2])
+                body = f"Back to healthy (was {prev_verdict}).\n" + "\n".join(
+                    h["info"][:2]
+                )
             try:
                 if send_alert(body, priority=prio, title=title):
                     last_sent = now()
             except Exception as e:
                 print(f"Alert send failed: {e}", file=sys.stderr)
-        write_json(p.health_state, {"verdict": h["verdict"], "checked": iso(),
-                                    "lastNotified": iso(last_sent) if last_sent else None})
+        write_json(
+            p.health_state,
+            {
+                "verdict": h["verdict"],
+                "checked": iso(),
+                "lastNotified": iso(last_sent) if last_sent else None,
+            },
+        )
 
     if not notify or sys.stdout.isatty():
         color = {"HEALTHY": "32", "WARNING": "33", "DOWN": "31"}[h["verdict"]]
@@ -374,7 +514,11 @@ def cmd_health(p: Paths, notify: bool) -> int:
             print(c("33", f"  [i] {s}"))
         for s in h["info"]:
             print(f"   -  {s}")
-        issues = [ln for ln in tail_lines(p.supervisor_log, 300) if re.search(r"\[(WARN|ERROR)\]", ln)][-5:]
+        issues = [
+            ln
+            for ln in tail_lines(p.supervisor_log, 300)
+            if re.search(r"\[(WARN|ERROR)\]", ln)
+        ][-5:]
         if issues:
             print("\n  Recent supervisor warnings/errors:")
             for ln in issues:
@@ -385,9 +529,13 @@ def cmd_health(p: Paths, notify: bool) -> int:
 
 # ---------------------------------------------------------------- summary
 TS_RE = re.compile(r"^(\d{2}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})")
-GAIN_RE = re.compile(r"\+(\d+) → (?:Streamer\(username=)?([^,\s(]+).*?Reason: ([A-Z_]+)")
-BET_RE = re.compile(r"EventPrediction(?:\(event_id=[^,]*, streamer=Streamer\(username=|: )([^,\s(]+)"
-                    r".*Result: (WIN|LOSE|REFUND), \w+: ([+-]?[\d.]+)([kKMBT]?)")
+GAIN_RE = re.compile(
+    r"\+(\d+) → (?:Streamer\(username=)?([^,\s(]+).*?Reason: ([A-Z_]+)"
+)
+BET_RE = re.compile(
+    r"EventPrediction(?:\(event_id=[^,]*, streamer=Streamer\(username=|: )([^,\s(]+)"
+    r".*Result: (WIN|LOSE|REFUND), \w+: ([+-]?[\d.]+)([kKMBT]?)"
+)
 MULT = {"": 1, "k": 1e3, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
 
@@ -401,9 +549,15 @@ def get_summary(p: Paths, hours: int) -> str:
 
     since = (now() - timedelta(hours=hours)).replace(tzinfo=None)
     try:
-        files = sorted((f for f in p.miner_log_dir.iterdir()
-                        if f.is_file() and re.search(r"\.log(\.\d{4}-\d{2}-\d{2})?$", f.name)),
-                       key=lambda f: f.stat().st_mtime, reverse=True)[: -(-hours // 24) + 2]
+        files = sorted(
+            (
+                f
+                for f in p.miner_log_dir.iterdir()
+                if f.is_file() and re.search(r"\.log(\.\d{4}-\d{2}-\d{2})?$", f.name)
+            ),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )[: -(-hours // 24) + 2]
     except OSError:
         files = []
     earned: dict[str, int] = {}
@@ -438,7 +592,9 @@ def get_summary(p: Paths, hours: int) -> str:
                     b = BET_RE.search(line)
                     if b:
                         who = b.group(1)
-                        bet_by[who] = bet_by.get(who, 0.0) + float(b.group(3)) * MULT[b.group(4)]
+                        bet_by[who] = (
+                            bet_by.get(who, 0.0) + float(b.group(3)) * MULT[b.group(4)]
+                        )
                         wins += b.group(2) == "WIN"
                         losses += b.group(2) == "LOSE"
                         refunds += b.group(2) == "REFUND"
@@ -449,10 +605,17 @@ def get_summary(p: Paths, hours: int) -> str:
     sum_earned = sum(earned.values())
     sum_bets = sum(bet_by.values())
     out = []
-    window = (f"since {first:%a %H:%M} (logs start there)"
-              if first and first > since + timedelta(minutes=30) else f"last {hours} h")
+    window = (
+        f"since {first:%a %H:%M} (logs start there)"
+        if first and first > since + timedelta(minutes=30)
+        else f"last {hours} h"
+    )
     out.append(f"Net {fmt(sum_earned + int(sum_bets))} points, {window}")
-    bet_line = f"{fmt(sum_bets)} ({wins} won, {losses} lost, {refunds} refunded)" if wins + losses + refunds else "none"
+    bet_line = (
+        f"{fmt(sum_bets)} ({wins} won, {losses} lost, {refunds} refunded)"
+        if wins + losses + refunds
+        else "none"
+    )
     out.append(f"Watching/claims: {fmt(sum_earned)}  Bets: {bet_line}")
     if earned:
         out.append("")
@@ -467,14 +630,27 @@ def get_summary(p: Paths, hours: int) -> str:
         out.append("No points logged in this window.")
     if by_reason:
         out.append("")
-        out.append("By type: " + ", ".join(f"{k} {fmt(v)}" for k, v in sorted(by_reason.items(), key=lambda kv: -kv[1])))
+        out.append(
+            "By type: "
+            + ", ".join(
+                f"{k} {fmt(v)}"
+                for k, v in sorted(by_reason.items(), key=lambda kv: -kv[1])
+            )
+        )
 
     st = read_json(p.status)
     if st:
         aware_since = now() - timedelta(hours=hours)
-        crashes = sum(1 for c in (st.get("crashes") or []) if c and (parse_time(c.get("time")) or aware_since) > aware_since)
-        up = (f"up {format_age(parse_time(st.get('minerStarted')))}"
-              if st.get("minerStarted") and st.get("minerState") == "running" else f"state {st.get('minerState')}")
+        crashes = sum(
+            1
+            for c in (st.get("crashes") or [])
+            if c and (parse_time(c.get("time")) or aware_since) > aware_since
+        )
+        up = (
+            f"up {format_age(parse_time(st.get('minerStarted')))}"
+            if st.get("minerStarted") and st.get("minerState") == "running"
+            else f"state {st.get('minerState')}"
+        )
         out.append("")
         out.append(f"Miner {up} | {crashes} crash(es) | version {st.get('version')}")
     return "\n".join(out)
@@ -489,7 +665,9 @@ def ensure_venv(miner_dir: Path) -> str:
     print(f"Creating virtual environment {venv} ...")
     r = subprocess.run([sys.executable, "-m", "venv", str(venv)])
     if r.returncode != 0:
-        sys.exit("Could not create the venv. On Debian/Ubuntu: sudo apt install python3-venv")
+        sys.exit(
+            "Could not create the venv. On Debian/Ubuntu: sudo apt install python3-venv"
+        )
     return find_python(miner_dir)
 
 
@@ -498,53 +676,111 @@ def cmd_install(p: Paths, args) -> int:
     if not shutil.which("git"):
         print("! git not found - the supervisor will run but cannot update the miner.")
     elif not (p.miner_dir / ".git").exists():
-        print("! This folder is not a git checkout - automatic updates are disabled. Clone the repo with git to enable them.")
+        print(
+            "! This folder is not a git checkout - automatic updates are disabled. Clone the repo with git to enable them."
+        )
     if not p.entry.is_file():
-        sys.exit(f"run.py not found in {p.miner_dir}. Copy example.py to run.py and set your username/streamers first.")
+        sys.exit(
+            f"run.py not found in {p.miner_dir}. Copy example.py to run.py and set your username/streamers first."
+        )
     if not WRAPPER.is_file():
-        print("! miner_wrapper.py not found next to this script - stops will use SIGINT directly.")
+        print(
+            "! miner_wrapper.py not found next to this script - stops will use SIGINT directly."
+        )
 
     python = args.python or ensure_venv(p.miner_dir)
     if sys.version_info < (3, 10):
         sys.exit("Python 3.10+ is required.")
     print(f"Python: {python}")
     print("Installing requirements.txt ...")
-    r = subprocess.run([python, "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r", str(p.requirements)])
+    r = subprocess.run(
+        [
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "-q",
+            "-r",
+            str(p.requirements),
+        ]
+    )
     if r.returncode != 0:
         sys.exit("pip install failed - fix the error above and run install again.")
 
     if not any(p.cookie_dir.glob("*.pkl")):
-        print("\nNo Twitch login cookie yet. Either run the miner once by hand to log in:\n"
-              f"    cd {p.miner_dir} && {python} run.py\n"
-              "or let the supervisor push the twitch.tv/activate code to your phone (needs alerts set up).")
+        print(
+            "\nNo Twitch login cookie yet. Either run the miner once by hand to log in:\n"
+            f"    cd {p.miner_dir} && {python} run.py\n"
+            "or let the supervisor push the twitch.tv/activate code to your phone (needs alerts set up)."
+        )
 
     if not ALERT_CONFIG.exists() and sys.stdin.isatty() and not args.no_prompt:
-        print("\nAlerts via Apprise (press Enter to skip). One URL per service, comma-separated, e.g.\n"
-              "  pover://USER_KEY@APP_TOKEN   tgram://BOT_TOKEN/CHAT_ID   discord://WEBHOOK_ID/TOKEN   ntfy://topic\n"
-              "Formats: https://github.com/caronc/apprise/wiki")
+        print(
+            "\nAlerts via Apprise (press Enter to skip). One URL per service, comma-separated, e.g.\n"
+            "  pover://USER_KEY@APP_TOKEN   tgram://BOT_TOKEN/CHAT_ID   discord://WEBHOOK_ID/TOKEN   ntfy://topic\n"
+            "Formats: https://github.com/caronc/apprise/wiki"
+        )
         urls = [u.strip() for u in input("Apprise URL(s): ").split(",") if u.strip()]
         if urls:
             write_json(ALERT_CONFIG, {"appriseUrls": urls})
             os.chmod(ALERT_CONFIG, 0o600)
-            print(f"Saved {ALERT_CONFIG} (mode 600). Test it with: minerctl.py test-alert")
+            print(
+                f"Saved {ALERT_CONFIG} (mode 600). Test it with: minerctl.py test-alert"
+            )
 
     p.log_dir.mkdir(parents=True, exist_ok=True)
     be.install(python, p.miner_dir, args.health_minutes, args.summary_time, args.hours)
-    print("\nInstalled and started. Checking health in a moment with: minerctl.py health")
+    print(
+        "\nInstalled and started. Checking health in a moment with: minerctl.py health"
+    )
     return 0
 
 
 # ---------------------------------------------------------------- main
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["install", "health", "status", "summary", "test-alert", "start", "stop", "uninstall"])
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "action",
+        choices=[
+            "install",
+            "health",
+            "status",
+            "summary",
+            "test-alert",
+            "start",
+            "stop",
+            "uninstall",
+        ],
+    )
     ap.add_argument("--miner-dir", type=Path, default=default_miner_dir())
-    ap.add_argument("--python", default="", help="python for the miner (default: repo venv, created on install)")
-    ap.add_argument("--notify", action="store_true", help="health/summary: send an alert (Apprise or Pushover)")
-    ap.add_argument("--hours", type=int, default=24, help="summary window (the miner keeps 7 days of logs)")
+    ap.add_argument(
+        "--python",
+        default="",
+        help="python for the miner (default: repo venv, created on install)",
+    )
+    ap.add_argument(
+        "--notify",
+        action="store_true",
+        help="health/summary: send an alert (Apprise or Pushover)",
+    )
+    ap.add_argument(
+        "--hours",
+        type=int,
+        default=24,
+        help="summary window (the miner keeps 7 days of logs)",
+    )
     ap.add_argument("--health-minutes", type=int, default=30)
-    ap.add_argument("--summary-time", default="08:57", help="HH:MM for the daily summary")
-    ap.add_argument("--no-prompt", action="store_true", help="install: skip the alert setup question")
+    ap.add_argument(
+        "--summary-time", default="08:57", help="HH:MM for the daily summary"
+    )
+    ap.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="install: skip the alert setup question",
+    )
     args = ap.parse_args()
     p = Paths(args.miner_dir)
 
@@ -558,17 +794,25 @@ def main() -> int:
         if args.notify:
             cfg = load_alert_config() or {}
             try:
-                if send_alert(text, priority=int(cfg.get("summaryPriority", -1)),
-                                 title=f"Miner summary ({args.hours} h)", mono=True):
+                if send_alert(
+                    text,
+                    priority=int(cfg.get("summaryPriority", -1)),
+                    title=f"Miner summary ({args.hours} h)",
+                    mono=True,
+                ):
                     print("\nSent.")
             except Exception as e:
                 print(f"Alert send failed: {e}", file=sys.stderr)
         return 0
     if args.action == "test-alert":
-        if send_alert(f"Test from minerctl.py at {now():%H:%M:%S}.", title="Miner test"):
+        if send_alert(
+            f"Test from minerctl.py at {now():%H:%M:%S}.", title="Miner test"
+        ):
             print("Sent.")
             return 0
-        print(f'No alert config. Create {ALERT_CONFIG} with: {{"appriseUrls": ["pover://USER_KEY@APP_TOKEN"]}}')
+        print(
+            f'No alert config. Create {ALERT_CONFIG} with: {{"appriseUrls": ["pover://USER_KEY@APP_TOKEN"]}}'
+        )
         return 1
     be = backend()
     if args.action == "start":
@@ -579,8 +823,10 @@ def main() -> int:
         print("Stopped. The health check will report DOWN until you start it again.")
     elif args.action == "uninstall":
         be.uninstall()
-        print("Removed the supervisor, health check and summary jobs. Miner folder, cookies, logs and "
-              "miner-alerts.json left in place.")
+        print(
+            "Removed the supervisor, health check and summary jobs. Miner folder, cookies, logs and "
+            "miner-alerts.json left in place."
+        )
     return 0
 
 

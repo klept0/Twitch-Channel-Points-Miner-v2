@@ -11,6 +11,7 @@ The supervisor force-kills the process if that takes too long.
 
 Needs Python 3.10+ (interrupt_main with a signal number).
 """
+
 import _thread
 import os
 import runpy
@@ -45,7 +46,9 @@ def main() -> None:
         # Runs the miner's installed SIGINT handler in the main thread.
         _thread.interrupt_main(signal.SIGINT)
 
-    threading.Thread(target=watch_for_stop, name="stop-flag-watcher", daemon=True).start()
+    threading.Thread(
+        target=watch_for_stop, name="stop-flag-watcher", daemon=True
+    ).start()
 
     # Make run.py behave exactly as if it were started directly from its folder.
     os.chdir(miner_dir)

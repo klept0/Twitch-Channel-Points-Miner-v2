@@ -944,7 +944,8 @@ class Twitch(object):
 
     def notify_unclaimed_drop(self, campaign, drop):
         """Reports a finished drop that could not be claimed (once per drop instance).
-        Campaigns that need a linked game account (Twitch shows "Connect" instead of "Claim") are skipped."""
+        Campaigns that need a linked game account (Twitch shows "Connect" instead of "Claim") are skipped.
+        """
         if (campaign.get("self") or {}).get("isAccountConnected") is False:
             logger.debug(
                 f"Unclaimed drop {drop.name} skipped: campaign {campaign.get('name')} needs an account connection"

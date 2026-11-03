@@ -5,6 +5,7 @@ control script (minerctl.py). Standard library only; Python 3.10+.
 The files written here (supervisor-logs/status.json, update-state.json, health-state.json)
 use the same layout as the Windows PowerShell scripts, so either side can read them.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -71,7 +72,7 @@ def parse_time(value) -> datetime | None:
     if "." in s:
         head, _, rest = s.partition(".")
         digits = "".join(c for c in rest if c.isdigit())
-        tz = rest[len(digits):]
+        tz = rest[len(digits) :]
         s = f"{head}.{digits[:6]}{tz}" if digits else head + tz
     try:
         dt = datetime.fromisoformat(s)
@@ -127,7 +128,9 @@ def _as_list(value) -> list[str]:
     return [str(v) for v in (value or []) if str(v).strip()]
 
 
-def send_apprise(cfg: dict, msg: str, priority: int, title: str, url: str | None) -> bool | None:
+def send_apprise(
+    cfg: dict, msg: str, priority: int, title: str, url: str | None
+) -> bool | None:
     """Sends through Apprise when miner-alerts.json has "appriseUrls". None = Apprise not configured.
 
     priority >= 1 goes to "appriseUrgentUrls" when set (e.g. pover://user@token?priority=emergency),
@@ -140,7 +143,9 @@ def send_apprise(cfg: dict, msg: str, priority: int, title: str, url: str | None
     try:
         import apprise  # type: ignore
     except ImportError as e:
-        raise RuntimeError("appriseUrls is set but the 'apprise' package is missing (pip install apprise)") from e
+        raise RuntimeError(
+            "appriseUrls is set but the 'apprise' package is missing (pip install apprise)"
+        ) from e
     targets = urgent if priority >= 1 and urgent else (normal or urgent)
     client = apprise.Apprise()
     for u in targets:
@@ -148,15 +153,22 @@ def send_apprise(cfg: dict, msg: str, priority: int, title: str, url: str | None
     if len(client) == 0:
         raise RuntimeError("no valid Apprise URL in miner-alerts.json")
     notify_type = {2: apprise.NotifyType.FAILURE, 1: apprise.NotifyType.WARNING}.get(
-        min(priority, 2), apprise.NotifyType.INFO)
+        min(priority, 2), apprise.NotifyType.INFO
+    )
     body = f"{msg}\n\n{url}" if url else msg
     if not client.notify(title=title, body=body, notify_type=notify_type):
         raise RuntimeError("Apprise could not deliver to one or more services")
     return True
 
 
-def send_alert(msg: str, priority: int = 0, title: str = "Twitch miner", mono: bool = False,
-               url: str | None = None, url_title: str | None = None) -> bool:
+def send_alert(
+    msg: str,
+    priority: int = 0,
+    title: str = "Twitch miner",
+    mono: bool = False,
+    url: str | None = None,
+    url_title: str | None = None,
+) -> bool:
     """Sends an alert via Apprise ("appriseUrls") or Pushover ("pushoverToken"/"pushoverUser").
     Returns False when nothing is configured; raises on delivery errors.
 
@@ -191,7 +203,9 @@ def send_alert(msg: str, priority: int = 0, title: str = "Twitch miner", mono: b
         body["url"] = url
         if url_title:
             body["url_title"] = url_title
-    req = urllib.request.Request(PUSHOVER_URL, data=urllib.parse.urlencode(body).encode())
+    req = urllib.request.Request(
+        PUSHOVER_URL, data=urllib.parse.urlencode(body).encode()
+    )
     with urllib.request.urlopen(req, timeout=15, context=_ssl_context()):
         pass
     return True
@@ -226,7 +240,12 @@ def pid_alive(pid) -> bool:
 
 def rss_mb(pid) -> int | None:
     try:
-        out = subprocess.run(["ps", "-o", "rss=", "-p", str(int(pid))], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(int(pid))],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
         return int(out.strip()) // 1024
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
@@ -235,7 +254,9 @@ def rss_mb(pid) -> int | None:
 def find_miner_pids(entry: Path) -> list[int]:
     """PIDs of python processes whose command line contains the miner's run.py path."""
     try:
-        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=15).stdout
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=15
+        ).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     me = {os.getpid(), os.getppid()}
@@ -243,7 +264,12 @@ def find_miner_pids(entry: Path) -> list[int]:
     pids = []
     for line in out.splitlines():
         pid_s, _, cmd = line.strip().partition(" ")
-        if needle in cmd and "python" in cmd.lower() and "miner_supervisor" not in cmd and "minerctl" not in cmd:
+        if (
+            needle in cmd
+            and "python" in cmd.lower()
+            and "miner_supervisor" not in cmd
+            and "minerctl" not in cmd
+        ):
             try:
                 pid = int(pid_s)
             except ValueError:

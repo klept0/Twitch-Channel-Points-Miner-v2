@@ -31,12 +31,16 @@ class Apprise(object):
         try:
             import apprise
         except ImportError:
-            logger.error("Apprise notifications are configured but the 'apprise' package is missing: pip install apprise")
+            logger.error(
+                "Apprise notifications are configured but the 'apprise' package is missing: pip install apprise"
+            )
             return
         self._client = apprise.Apprise()
         for url in self.urls:
             if not self._client.add(url):
-                logger.error(f"Apprise: invalid notification URL ignored: {url.split('://')[0]}://...")
+                logger.error(
+                    f"Apprise: invalid notification URL ignored: {url.split('://')[0]}://..."
+                )
 
     def send(self, message: str, event: Events) -> None:
         if self._client is None or str(event) not in self.events:
