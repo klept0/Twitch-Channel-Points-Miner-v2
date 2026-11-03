@@ -27,7 +27,7 @@ PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 
 
 def default_miner_dir() -> Path:
-    """The repo this TaskScripts folder lives in, if it looks like the miner; else ~/Twitch-Channel-Points-Miner-v2."""
+    """The repo this supervisor folder lives in, if it looks like the miner; else ~/Twitch-Channel-Points-Miner-v2."""
     parent = SCRIPT_DIR.parent
     if (parent / "TwitchChannelPointsMiner").is_dir():
         return parent

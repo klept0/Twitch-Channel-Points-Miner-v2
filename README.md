@@ -621,7 +621,7 @@ docker run \
 
 ## Run unattended (supervisor)
 
-`TaskScripts/` has an optional supervisor that keeps the miner running
+`supervisor/` has an optional supervisor that keeps the miner running
 without a terminal: Task Scheduler on Windows, systemd on Linux, launchd on
 macOS. It:
 
@@ -636,11 +636,11 @@ macOS. It:
 ### Linux and macOS
 
 ```bash
-python3 TaskScripts/minerctl.py install   # creates .venv, installs requirements, registers the jobs
-python3 TaskScripts/minerctl.py health    # HEALTHY / WARNING / DOWN (exit 0 / 1 / 2)
-python3 TaskScripts/minerctl.py summary --hours 168
-python3 TaskScripts/minerctl.py test-alert
-python3 TaskScripts/minerctl.py start | stop | uninstall
+python3 supervisor/minerctl.py install   # creates .venv, installs requirements, registers the jobs
+python3 supervisor/minerctl.py health    # HEALTHY / WARNING / DOWN (exit 0 / 1 / 2)
+python3 supervisor/minerctl.py summary --hours 168
+python3 supervisor/minerctl.py test-alert
+python3 supervisor/minerctl.py start | stop | uninstall
 ```
 
 On Linux, install enables lingering so the miner runs while you're logged
@@ -652,11 +652,11 @@ Debian/Ubuntu install `python3-venv` first.
 In an admin PowerShell:
 
 ```powershell
-.\TaskScripts\MinerTask.ps1                                     # install: three scheduled tasks
-.\TaskScripts\MinerTask.ps1 -Action Health
-.\TaskScripts\MinerTask.ps1 -Action Summary -SummaryHours 168
-.\TaskScripts\MinerTask.ps1 -Action TestAlert
-.\TaskScripts\MinerTask.ps1 -Action Start | Stop | Uninstall
+.\supervisor\MinerTask.ps1                                     # install: three scheduled tasks
+.\supervisor\MinerTask.ps1 -Action Health
+.\supervisor\MinerTask.ps1 -Action Summary -SummaryHours 168
+.\supervisor\MinerTask.ps1 -Action TestAlert
+.\supervisor\MinerTask.ps1 -Action Start | Stop | Uninstall
 ```
 
 `-LogonMode` sets how the tasks run: `Password` (default, runs at boot),
@@ -665,8 +665,8 @@ In an admin PowerShell:
 
 ### Supervisor alerts
 
-Copy `TaskScripts/miner-alerts.example.json` to
-`TaskScripts/miner-alerts.json` (git-ignored):
+Copy `supervisor/miner-alerts.example.json` to
+`supervisor/miner-alerts.json` (git-ignored):
 
 ```json
 {

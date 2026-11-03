@@ -156,5 +156,6 @@ keep_replit_alive.py
 .replit
 replit.nix
 
-# Fork: local secrets
-TaskScripts/miner-alerts.json
+# Supervisor: local alert config and runtime state
+supervisor/miner-alerts.json
+supervisor-logs/

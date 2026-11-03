@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$MinerDir = "$env:USERPROFILE\Scripting\Twitch-Channel-Points-Miner-v2",
+    [string]$MinerDir = (Split-Path -Parent $PSScriptRoot),   # default: the repo this supervisor\ folder is in
     [string]$PythonExe = '',
     [string]$Entry = 'run.py',
     [ValidateRange(1, 500)]  [int]$RestartHours = 24,

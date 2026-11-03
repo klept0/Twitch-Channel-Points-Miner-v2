@@ -18,7 +18,7 @@
     -Action Stop      : (admin) stops the supervisor task and shuts the miner down cleanly.
     -Action Uninstall : (admin) stops everything and removes all three tasks (leaves your miner folder alone).
 
-    Keep this file next to MinerSupervisor.ps1 and miner_wrapper.py (e.g. all in %USERPROFILE%\Scripting\TaskScripts\).
+    Keep this file next to MinerSupervisor.ps1 and miner_wrapper.py (they ship together in the repo's supervisor\ folder).
     Pushover keys live in miner-alerts.json next to the scripts:
         { "pushoverToken": "<APP_TOKEN>", "pushoverUser": "<USER_KEY>", "device": "", "downPriority": 2 }
     downPriority: 2 = emergency (repeats every 5 min until acknowledged, up to 1 h), 1 = high.
@@ -40,7 +40,7 @@
 param(
     [ValidateSet('Install', 'Health', 'Status', 'Summary', 'TestAlert', 'Start', 'Stop', 'Uninstall')]
     [string]$Action = 'Install',
-    [string]$MinerDir  = "$env:USERPROFILE\Scripting\Twitch-Channel-Points-Miner-v2",
+    [string]$MinerDir  = (Split-Path -Parent $PSScriptRoot),   # default: the repo this supervisor\ folder is in
     [string]$PythonExe = '',            # leave empty to auto-detect (venv\, .venv\, env\, py, python)
     [ValidateSet('Password', 'S4U', 'AtLogon')]
     [string]$LogonMode = 'Password',
@@ -82,7 +82,7 @@ function Resolve-MinerDir {
 
     if ($Action -ne 'Install') { throw "Miner not found in $MinerDir. Pass -MinerDir." }
 
-    $roots = @("$env:USERPROFILE\Scripting", "$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads",
+    $roots = @("$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads",
                "$env:USERPROFILE\Documents", "$env:USERPROFILE\OneDrive") | Where-Object { Test-Path -LiteralPath $_ }
     Write-Host "No miner in $MinerDir - searching $($roots -join ', ') ..."
     $found = foreach ($r in $roots) {
