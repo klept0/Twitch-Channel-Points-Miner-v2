@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.utils import percentage
@@ -10,6 +10,12 @@ def parse_datetime(datetime_str):
         except ValueError:
             continue
     raise ValueError(f"time data '{datetime_str}' does not match format")
+
+
+def utc_now():
+    # Twitch timestamps are UTC; parse_datetime returns naive UTC datetimes
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 class Drop(object):
     __slots__ = [
@@ -47,7 +53,7 @@ class Drop(object):
 
         self.end_at = parse_datetime(dict["endAt"])
         self.start_at = parse_datetime(dict["startAt"])
-        self.dt_match = self.start_at < datetime.now() < self.end_at
+        self.dt_match = self.start_at < utc_now() < self.end_at
 
     def update(
         self,
@@ -85,6 +91,20 @@ class Drop(object):
             self.is_claimed is False and self.drop_instance_id is not None
         )
         self.percentage_progress = updated_percentage
+
+    def can_finish(self, campaign_end_at=None, margin_minutes=5):
+        """True if the minutes still needed fit before the drop (or its campaign) ends.
+        The margin absorbs small inaccuracies in Twitch's reported progress."""
+        if self.is_claimed is True or self.has_preconditions_met is False:
+            return False
+        end_at = (
+            self.end_at
+            if campaign_end_at is None
+            else min(self.end_at, campaign_end_at)
+        )
+        remaining = max(self.minutes_required - self.current_minutes_watched, 0)
+        minutes_left = (end_at - utc_now()).total_seconds() / 60
+        return remaining <= minutes_left + margin_minutes
 
     def __repr__(self):
         return f"Drop(id={self.id}, name={self.name}, benefit={self.benefit}, minutes_required={self.minutes_required}, has_preconditions_met={self.has_preconditions_met}, current_minutes_watched={self.current_minutes_watched}, percentage_progress={self.percentage_progress}%, drop_instance_id={self.drop_instance_id}, is_claimed={self.is_claimed})"

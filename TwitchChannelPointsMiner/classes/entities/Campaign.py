@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
 from TwitchChannelPointsMiner.classes.Settings import Settings
@@ -10,6 +10,12 @@ def parse_datetime(datetime_str):
         except ValueError:
             continue
     raise ValueError(f"time data '{datetime_str}' does not match format")
+
+
+def utc_now():
+    # Twitch timestamps are UTC; parse_datetime returns naive UTC datetimes
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 class Campaign(object):
     __slots__ = [
@@ -39,7 +45,7 @@ class Campaign(object):
 
         self.end_at = parse_datetime(dict["endAt"])
         self.start_at = parse_datetime(dict["startAt"])
-        self.dt_match = self.start_at < datetime.now() < self.end_at
+        self.dt_match = self.start_at < utc_now() < self.end_at
 
         self.drops = list(map(lambda x: Drop(x), dict["timeBasedDrops"]))
 
@@ -57,6 +63,10 @@ class Campaign(object):
         self.drops = list(
             filter(lambda x: x.dt_match is True and x.is_claimed is False, self.drops)
         )
+
+    def can_finish(self):
+        """True if at least one drop can still be completed before it ends."""
+        return any(drop.can_finish(self.end_at) for drop in self.drops)
 
     def __eq__(self, other):
         if isinstance(other, self.__class__):
