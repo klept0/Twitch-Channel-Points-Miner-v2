@@ -195,6 +195,19 @@ function Get-AlertConfig {
 function Send-Pushover {
     param([string]$Msg, [int]$Priority = 0, [string]$Title = 'Twitch miner', [switch]$Mono)
     $cfg = Get-AlertConfig
+    if ($cfg -and ($cfg.appriseUrls -or $cfg.appriseUrgentUrls)) {
+        # Apprise (Discord, Telegram, Matrix, ntfy, Pushover, ...) via notify.py; message body on stdin.
+        $py = if ($PythonExe) { $PythonExe } else { Find-Python $script:Dir }
+        if (-not $py) { throw 'Python not found - needed to send Apprise alerts.' }
+        $ErrorActionPreference = 'Continue'
+        $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $a = @((Join-Path $PSScriptRoot 'notify.py'), '--title', $Title, '--priority', "$Priority")
+        if ($Mono) { $a += '--mono' }
+        $out = $Msg | & $py @a 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -eq 0) { return $true }
+        if ($LASTEXITCODE -eq 3) { return $false }
+        throw "Apprise send failed: $($out -join ' ')"
+    }
     if (-not $cfg -or -not $cfg.pushoverToken -or -not $cfg.pushoverUser) { return $false }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if ($Msg.Length -gt 1000) { $Msg = $Msg.Substring(0, 1000) + '...' }

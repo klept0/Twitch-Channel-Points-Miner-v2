@@ -208,7 +208,7 @@ class TwitchChannelPointsMiner:
         followers: bool = False,
         followers_order: FollowersOrder = FollowersOrder.ASC,
     ):
-        self.run(streamers=streamers, blacklist=blacklist, followers=followers)
+        self.run(streamers=streamers, blacklist=blacklist, followers=followers, followers_order=followers_order)
 
     def run(
         self,

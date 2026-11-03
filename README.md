@@ -12,54 +12,104 @@
 <a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Version" src="https://img.shields.io/docker/v/rdavidoff/twitch-channel-points-miner-v2?style=flat&color=white&logo=docker&logoColor=white&label=release"></a>
 <a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Stars" src="https://img.shields.io/docker/stars/rdavidoff/twitch-channel-points-miner-v2?style=flat&color=limegreen&logo=docker&logoColor=white&label=stars"></a>
 <a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/rdavidoff/twitch-channel-points-miner-v2?style=flat&color=blue&logo=docker&logoColor=white&label=pulls"></a>
-<a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Images Size AMD64" src="https://img.shields.io/docker/image-size/rdavidoff/twitch-channel-points-miner-v2/latest?arch=amd64&label=AMD64 image size&style=flat&color=purple&logo=amd&logoColor=white"></a>
-<a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Images Size ARM64" src="https://img.shields.io/docker/image-size/rdavidoff/twitch-channel-points-miner-v2/latest?arch=arm64&label=ARM64 image size&style=flat&color=black&logo=arm&logoColor=white"></a>
-<a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Images Size ARMv7" src="https://img.shields.io/docker/image-size/rdavidoff/twitch-channel-points-miner-v2/latest?arch=arm&label=ARMv7 image size&style=flat&color=lightyellow&logo=arm&logoColor=white"></a>
+<a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Images Size AMD64" src="https://img.shields.io/docker/image-size/rdavidoff/twitch-channel-points-miner-v2/latest?arch=amd64&label=AMD64%20image%20size&style=flat&color=purple&logo=amd&logoColor=white"></a>
+<a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Images Size ARM64" src="https://img.shields.io/docker/image-size/rdavidoff/twitch-channel-points-miner-v2/latest?arch=arm64&label=ARM64%20image%20size&style=flat&color=black&logo=arm&logoColor=white"></a>
+<a href="https://hub.docker.com/r/rdavidoff/twitch-channel-points-miner-v2"><img alt="Docker Images Size ARMv7" src="https://img.shields.io/docker/image-size/rdavidoff/twitch-channel-points-miner-v2/latest?arch=arm&label=ARMv7%20image%20size&style=flat&color=lightyellow&logo=arm&logoColor=white"></a>
 </p>
 
 
 <h1 align="center">https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2</h1>
 
 > [!NOTE]
-> **About this fork (klept0).** The miner code is unchanged from upstream. This fork adds a ready-made `run.py` and a set of Windows scripts that run the miner unattended through Task Scheduler. See [MODS.md](MODS.md) for a file list.
+> **About this fork.** Based on [rdavydov/Twitch-Channel-Points-Miner-v2](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2). It adds:
+> - **Apprise notifications** in the miner: one `Apprise` notifier reaches Discord, Telegram, Matrix, Pushover, Gotify, ntfy, Slack, email and [100+ more](https://github.com/caronc/apprise/wiki) (upstream request [#823](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/823)).
+> - **An unattended supervisor** for Windows (Task Scheduler), Linux (systemd) and macOS (launchd): auto-update with rollback, restarts, freeze detection, login-code push, health checks and a daily points summary.
+> - A ready-made `run.py` (credentials are placeholders).
+>
+> The Docker image and the sections below the fork notes describe upstream; the upstream Docker image does not include these additions.
 
-## Fork additions: Windows supervisor
+## Fork additions
 
-| File | Purpose |
-|------|---------|
-| `run.py` | Example config (drops/streak priority, predictions, Pushover events). Credentials are placeholders: set `username`; `password=None` prompts on first login. |
-| `TaskScripts/MinerTask.ps1` | Installer and control script. Registers and manages three scheduled tasks. |
-| `TaskScripts/MinerSupervisor.ps1` | Long-running supervisor that starts, watches, updates and restarts the miner. |
-| `TaskScripts/miner_wrapper.py` | Python launcher the supervisor uses to run `run.py` hidden with captured output. |
-| `TaskScripts/miner-alerts.example.json` | Pushover template. Copy to `miner-alerts.json` and fill in your keys. |
+### Apprise notifications (miner)
+Add an `Apprise` notifier to `LoggerSettings`. It works next to, or instead of, the Telegram/Discord/Webhook/Matrix/Pushover/Gotify notifiers.
+```python
+from TwitchChannelPointsMiner.classes.Apprise import Apprise
+
+logger_settings=LoggerSettings(
+    ...
+    apprise=Apprise(
+        urls=["discord://WEBHOOK_ID/WEBHOOK_TOKEN", "tgram://BOT_TOKEN/CHAT_ID", "pover://USER_KEY@APP_TOKEN"],
+        events=[Events.DROP_CLAIM, Events.DROP_STATUS, Events.CHAT_MENTION],   # only these events are sent
+    ),
+)
+```
+`apprise` is in `requirements.txt`. URL formats for every service: https://github.com/caronc/apprise/wiki
+
+### Supervisor files (`TaskScripts/`)
+| File | Platform | Purpose |
+|------|----------|---------|
+| `minerctl.py` | Linux, macOS | Installer and control script (systemd user units / launchd agents). |
+| `miner_supervisor.py` | Linux, macOS | Long-running supervisor that starts, watches, updates and restarts the miner. |
+| `MinerTask.ps1` | Windows | Installer and control script (three Task Scheduler tasks). |
+| `MinerSupervisor.ps1` | Windows | Long-running supervisor (PowerShell 5.1 or 7). |
+| `miner_wrapper.py` | all | Runs `run.py` and stops it cleanly (the miner's own Ctrl+C shutdown) on request. |
+| `notify.py`, `miner_common.py` | all | Alert sending (Apprise or Pushover) and shared helpers. |
+| `miner-alerts.example.json` | all | Alert config template. Copy to `miner-alerts.json` (git-ignored). |
 
 ### What the supervisor does
-- Checks upstream for updates every 24 h, fast-forwards the checkout and reinstalls `requirements.txt` only when it changed.
-- Rolls back a bad update: if a new commit crashes 3 times within 30 min, it resets to the last good commit and skips the bad one.
-- Restarts gracefully every 24 h, on crash (backoff from 30 s up to 15 min), and when the log stops growing for 20 min.
-- Handles Twitch login: moves a rejected cookie aside, and pushes the `twitch.tv/activate` code to your phone.
-- Writes `supervisor-logs/status.json` every minute and sends Pushover alerts when `miner-alerts.json` exists.
-- Works on Windows PowerShell 5.1 and PowerShell 7. Refuses to run twice.
+- Checks the git remote for updates every 24 h, fast-forwards the checkout and reinstalls `requirements.txt` only when it changed.
+- Rolls back a bad update: if a new commit crashes 3 times within 30 min, it resets to the last good commit (your local edits are kept) and skips the bad one.
+- Restarts gracefully every 24 h, on crash (backoff from 30 s up to 15 min), and when the log stops growing for 20 min (needs `file_level=logging.DEBUG`).
+- Handles Twitch login: moves a rejected cookie aside, and sends you the `twitch.tv/activate` code.
+- Writes `supervisor-logs/status.json` every minute; the health check alerts when the verdict changes (DOWN repeats every 6 h).
+- Refuses to run twice.
 
-### Setup (Windows)
-1. Clone the miner to `%USERPROFILE%\Scripting\Twitch-Channel-Points-Miner-v2` (or pass `-MinerDir`) and install `requirements.txt`.
+### Alerts (`TaskScripts/miner-alerts.json`)
+```json
+{
+  "appriseUrls": ["tgram://BOT_TOKEN/CHAT_ID"],
+  "appriseUrgentUrls": ["pover://USER_KEY@APP_TOKEN?priority=emergency"]
+}
+```
+`appriseUrgentUrls` is optional: crashes, DOWN and login-code alerts go there instead of `appriseUrls`. Pushover-only configs (`pushoverToken`, `pushoverUser`) still work.
+
+### Setup: Linux / macOS
+Needs Python 3.10+ and git. On Debian/Ubuntu also `sudo apt install python3-venv`.
+1. `git clone https://github.com/klept0/Twitch-Channel-Points-Miner-v2.git && cd Twitch-Channel-Points-Miner-v2`
+2. Edit `run.py`: set your Twitch `username` and streamers. Then `git update-index --skip-worktree run.py` so your edits are never committed.
+3. `python3 TaskScripts/minerctl.py install`. It creates `.venv`, installs requirements, asks for Apprise URLs, and registers the supervisor, a 30-minute health check and a daily summary.
+4. First login: approve the code it sends you at twitch.tv/activate, or run `.venv/bin/python run.py` once by hand.
+
+On Linux, install runs `loginctl enable-linger` so the miner keeps running after you log out. On macOS the jobs are LaunchAgents and run while you are logged in.
+
+```bash
+python3 TaskScripts/minerctl.py health                 # HEALTHY / WARNING / DOWN (exit 0/1/2)
+python3 TaskScripts/minerctl.py summary --hours 168    # points, bets and uptime for the last 7 days
+python3 TaskScripts/minerctl.py test-alert
+python3 TaskScripts/minerctl.py start | stop | uninstall
+```
+
+### Setup: Windows
+1. Clone the repo to `%USERPROFILE%\Scripting\Twitch-Channel-Points-Miner-v2` (or pass `-MinerDir`) and run `pip install -r requirements.txt`.
 2. Edit `run.py`: set your Twitch `username` and streamers. Keep `emoji=False` on Windows.
-3. Optional: copy `TaskScripts/miner-alerts.example.json` to `miner-alerts.json` and add your Pushover token and user key.
+3. Optional: copy `TaskScripts\miner-alerts.example.json` to `miner-alerts.json` and add your Apprise URLs.
 4. In an admin PowerShell, run `.\TaskScripts\MinerTask.ps1`. It finds Python, checks the login cookie, and registers the supervisor, a 30-minute health check and a daily points summary.
 
-### Commands
 ```powershell
 .\TaskScripts\MinerTask.ps1 -Action Health                      # HEALTHY / WARNING / DOWN (exit 0/1/2)
-.\TaskScripts\MinerTask.ps1 -Action Summary -SummaryHours 168   # points, bets and uptime for the last 7 days
-.\TaskScripts\MinerTask.ps1 -Action TestAlert                   # send a test Pushover notification
+.\TaskScripts\MinerTask.ps1 -Action Summary -SummaryHours 168   # last 7 days
+.\TaskScripts\MinerTask.ps1 -Action TestAlert
 .\TaskScripts\MinerTask.ps1 -Action Start | Stop | Uninstall    # admin
 ```
 `-LogonMode` picks how the tasks run: `Password` (default, runs at boot), `S4U` (no stored password; may not work with Microsoft accounts) or `AtLogon`.
 
 > [!WARNING]
-> Never commit your real `run.py` password, `miner-alerts.json`, or the `cookies/` folder. `miner-alerts.json` is not tracked in this repo.
+> Never commit your real `run.py` password, `miner-alerts.json`, or the `cookies/` folder.
 
 ---
+
+
+## Upstream documentation
 
 **Credits**
 - Main idea: https://github.com/gottagofaster236/Twitch-Channel-Points-Miner
@@ -84,7 +134,6 @@ Read more about the channel points [here](https://help.twitch.tv/s/article/chann
     - [Docker](#docker)
     	- [Docker Hub](#docker-hub)
 		- [Portainer](#portainer)
-    - [Replit](#replit)
     - [Limits](#limits)
 5. 🔧 [Settings](#settings)
     - [LoggerSettings](#loggersettings)
@@ -112,7 +161,7 @@ If you want to offer me a coffee, I would be grateful! ❤️
 |<a href="https://www.donationalerts.com/r/rdavydov" target="_blank"><img src="https://www.donationalerts.com/static/donations/dist/favicon.ico" alt="Donate via DonationAlerts" height="16" width="16"></a>|https://www.donationalerts.com/r/rdavydov|
 |<a href="https://boosty.to/rdavydov/donate" target="_blank"><img src="https://static.boosty.to/static/favicon.png?v=11" alt="Donate via Boosty" height="16" width="16"></a>|https://boosty.to/rdavydov/donate|
 
-If you have any issues or you want to contribute, you are welcome! But please read the [CONTRIBUTING.md](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/blob/master/CONTRIBUTING.md) file.
+If you have any issues or you want to contribute, you are welcome! But please read the [CONTRIBUTING.md](CONTRIBUTING.md) file.
 
 ## Main differences from the original repository:
 
@@ -125,7 +174,7 @@ If you have any issues or you want to contribute, you are welcome! But please re
 - Placing a bet / making a prediction with your channel points [#41](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/41) ([@lay295](https://github.com/lay295)) ✔️
 - Switchable analytics chart that shows the progress of your points with various annotations [#96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96) ✔️
 - Joining the IRC Chat to increase the watch time and get StreamElements points [#47](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/47) ✔️
-- [Moments](https://help.twitch.tv/s/article/moments) claiming [#182](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/182) ✔️
+- Moments claiming [#182](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/182) ✔️
 - Notifying on `@nickname` mention in the Twitch chat [#227](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/227) ✔️
 
 ## Logs feature
@@ -139,9 +188,6 @@ If you have any issues or you want to contribute, you are welcome! But please re
 %d/%m/%y %H:%M:%S - INFO - [set_offline]: 😴  Streamer(username=streamer-username4, channel_id=0000000, channel_points=3760) is Offline!
 %d/%m/%y %H:%M:%S - INFO - [set_online]: 🥳  Streamer(username=streamer-username, channel_id=0000000, channel_points=61365) is Online!
 %d/%m/%y %H:%M:%S - INFO - [start_bet]: 🔧  Start betting for EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx, title=Please star this repo) owned by Streamer(username=streamer-username, channel_id=0000000, channel_points=61365)
-%d/%m/%y %H:%M:%S - INFO - [__open_coins_menu]: 🔧  Open coins menu for EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx, title=Please star this repo)
-%d/%m/%y %H:%M:%S - INFO - [__click_on_bet]: 🔧  Click on the bet for EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx, title=Please star this repo)
-%d/%m/%y %H:%M:%S - INFO - [__enable_custom_bet_value]: 🔧  Enable input of custom value for EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx, title=Please star this repo)
 %d/%m/%y %H:%M:%S - INFO - [on_message]: ⏰  Place the bet after: 89.99s for: EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx-15c61914ef69, title=Please star this repo)
 %d/%m/%y %H:%M:%S - INFO - [on_message]: 🚀  +12 → Streamer(username=streamer-username, channel_id=0000000, channel_points=61377) - Reason: WATCH.
 %d/%m/%y %H:%M:%S - INFO - [make_predictions]: 🍀  Going to complete bet for EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx-15c61914ef69, title=Please star this repo) owned by Streamer(username=streamer-username, channel_id=0000000, channel_points=61377)
@@ -170,9 +216,6 @@ If you have any issues or you want to contribute, you are welcome! But please re
 %d/%m %H:%M:%S - 😴  streamer-username4 (xxx points) is Offline!
 %d/%m %H:%M:%S - 🥳  streamer-username (xxx points) is Online!
 %d/%m %H:%M:%S - 🔧  Start betting for EventPrediction: Please star this repo owned by streamer-username (xxx points)
-%d/%m %H:%M:%S - 🔧  Open coins menu for EventPrediction: Please star this repo
-%d/%m %H:%M:%S - 🔧  Click on the bet for EventPrediction: Please star this repo
-%d/%m %H:%M:%S - 🔧  Enable input of custom value for EventPrediction: Please star this repo
 %d/%m %H:%M:%S - ⏰  Place the bet after: 89.99s EventPrediction: Please star this repo
 %d/%m %H:%M:%S - 🚀  +12 → streamer-username (xxx points) - Reason: WATCH.
 %d/%m %H:%M:%S - 🍀  Going to complete bet for EventPrediction: Please star this repo owned by streamer-username (xxx points)
@@ -195,7 +238,7 @@ If you have any issues or you want to contribute, you are welcome! But please re
 %d/%m/%y %H:%M:%S - 📄  Logs file: /.../path/Twitch-Channel-Points-Miner-v2/logs/username.timestamp.log
 %d/%m/%y %H:%M:%S - ⌛  Duration 10:29:19.547371
 
-%d/%m/%y %H:%M:%S - 📊  BetSettings(Strategy=Strategy.SMART, Percentage=7, PercentageGap=20, MaxPoints=7500
+%d/%m/%y %H:%M:%S - 📊  BetSettings(strategy=SMART, percentage=7, percentage_gap=20, max_points=7500, minimum_points=None, stealth_mode=False)
 %d/%m/%y %H:%M:%S - 📊  EventPrediction(event_id=xxxx-xxxx-xxxx-xxxx, title="Event Title1")
 		Streamer(username=streamer-username, channel_id=0000000, channel_points=67247)
 		Bet(TotalUsers=1k, TotalPoints=11M), Decision={'choice': 'B', 'amount': 5289, 'id': 'xxxx-yyyy-zzzz'})
@@ -226,7 +269,7 @@ If you have any issues or you want to contribute, you are welcome! But please re
 ```
 
 ## How to use:
-First of all please create a run.py file. You can just copy [example.py](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/blob/master/example.py) and modify it according to your needs.
+First of all please create a run.py file. You can just copy [example.py](example.py) (or this fork's ready-made [run.py](run.py)) and modify it according to your needs.
 ```python
 # -*- coding: utf-8 -*-
 
@@ -238,14 +281,17 @@ from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Discord import Discord
 from TwitchChannelPointsMiner.classes.Webhook import Webhook
 from TwitchChannelPointsMiner.classes.Telegram import Telegram
+from TwitchChannelPointsMiner.classes.Matrix import Matrix
+from TwitchChannelPointsMiner.classes.Pushover import Pushover
 from TwitchChannelPointsMiner.classes.Gotify import Gotify
+from TwitchChannelPointsMiner.classes.Apprise import Apprise
 from TwitchChannelPointsMiner.classes.Settings import Priority, Events, FollowersOrder
 from TwitchChannelPointsMiner.classes.entities.Bet import Strategy, BetSettings, Condition, OutcomeKeys, FilterCondition, DelayMode
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 
 twitch_miner = TwitchChannelPointsMiner(
     username="your-twitch-username",
-    password="write-your-secure-psw",           # If no password will be provided, the script will ask interactively
+    password=None,                              # Not used: login is the twitch.tv/activate device-code flow (code printed on first run)
     claim_drops_startup=False,                  # If you want to auto claim all drops from Twitch inventory on the startup
     priority=[                                  # Custom priority in this case for example:
         Priority.STREAK,                        # - We want first of all to catch all watch streak from all streamers
@@ -307,13 +353,17 @@ twitch_miner = TwitchChannelPointsMiner(
             priority=8,
             events=[Events.STREAMER_ONLINE, Events.STREAMER_OFFLINE,
                     Events.BET_LOSE, Events.CHAT_MENTION], 
+        ),
+        apprise=Apprise(                                                            # One notifier for 100+ services: https://github.com/caronc/apprise/wiki
+            urls=["discord://WEBHOOK_ID/WEBHOOK_TOKEN", "ntfy://my-topic"],
+            events=[Events.DROP_CLAIM, Events.CHAT_MENTION],                          # Only these events will be sent
         )
     ),
     streamer_settings=StreamerSettings(
         make_predictions=True,                  # If you want to Bet / Make prediction
         follow_raid=True,                       # Follow raid to obtain more points
         claim_drops=True,                       # We can't filter rewards base on stream. Set to False for skip viewing counter increase and you will never obtain a drop reward from this script. Issue #21
-        claim_moments=True,                     # If set to True, https://help.twitch.tv/s/article/moments will be claimed when available
+        claim_moments=True,                     # If set to True, Twitch moments will be claimed when available
         watch_streak=True,                      # If a streamer go online change the priority of streamers array and catch the watch screak. Issue #11
         community_goals=False,                  # If True, contributes the max channel points per stream to the streamers' community challenge goals
         chat=ChatPresence.ONLINE,               # Join irc chat to increase watch-time [ALWAYS, NEVER, ONLINE, OFFLINE]
@@ -343,7 +393,7 @@ twitch_miner = TwitchChannelPointsMiner(
 # For example, if in the mine function you don't provide any value for 'make_prediction' but you have set it on TwitchChannelPointsMiner instance, the script will take the value from here.
 # If you haven't set any value even in the instance the default one will be used
 
-#twitch_miner.analytics(host="127.0.0.1", port=5000, refresh=5, days_ago=7)   # Start the Analytics web-server (replit: host="0.0.0.0")
+#twitch_miner.analytics(host="127.0.0.1", port=5000, refresh=5, days_ago=7)   # Start the Analytics web-server
 
 twitch_miner.mine(
     [
@@ -381,7 +431,7 @@ twitch_miner.mine(followers=True, blacklist=["user1", "user2"])  # Blacklist exa
 
 ### By cloning the repository
 1. Clone this repository `git clone https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2`
-2. Install all the requirements `pip install -r requirements.txt` . If you have problems with requirements, make sure to have at least Python3.6. You could also try to create a _virtualenv_ and then install all the requirements
+2. Install all the requirements `pip install -r requirements.txt` . If you have problems with requirements, make sure to have at least Python 3.10. You could also try to create a _virtualenv_ and then install all the requirements
 ```sh
 pip install virtualenv
 virtualenv -p python3 venv
@@ -409,7 +459,6 @@ These folders are mounted :
 **Example using docker-compose:**
 
 ```yml
-version: "3.9"
 
 services:
   miner:
@@ -446,7 +495,7 @@ The correct solution for Windows lies in the correct command line: `docker run -
 
 If you don't mount the volume for the analytics (or cookies or logs) folder, the folder will be automatically created on the Docker container, and you will lose all the data when it is stopped.
 
-If you don't have a cookie or it's your first time running the script, you will need to login to Twitch and start the container with `-it` args. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
+If you don't have a cookie or it's your first time running the script, start the container with `-it` args: the miner prints a code to enter at https://www.twitch.tv/activate. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
 
 ```sh
 docker run --name user1 -v $(pwd)/user1.py:/usr/src/app/run.py:ro -p 5001:5000 rdavidoff/twitch-channel-points-miner-v2
@@ -459,12 +508,6 @@ docker run --name user2 -v $(pwd)/user2.py:/usr/src/app/run.py:ro -p 5002:5000 r
 #### Portainer
 
 [Link](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/wiki/Deploy-Docker-container-in-Portainer) to the illustrated guide on how to deploy a Docker container in Portainer.
-
-### Replit
-
-Official Repl: https://replit.com/@rdavydov/Twitch-Channel-Points-Miner-v2
-
-Provided "as is" with no support. Testing purposes only. Updates may be delayed.
 
 ### Limits
 _**Twitch has a limit - you can't watch more than two channels at one time. We take the first two streamers from the list as they have the highest priority.**_
@@ -494,7 +537,7 @@ You can combine all priority but keep in mind that use `ORDER` and `POINTS_ASCEN
 | `time_zone`| str 	            | None                   	                                          | Set a specific time zone for console and file loggers. Use tz database names. Example: "America/Denver" https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/205|
 | `file_level`    	| level 	        | logging.DEBUG                  	                                  | Level of logs in file save - If you think the log file it's too big, use logging.INFO 	                                                                                                  |
 | `emoji`         	| bool            	| For Windows is False else True 	                                  | On Windows, we have a problem printing emoji. Set to false if you have a problem      	                                                                                                  |
-| `colored`         | bool            	| True 	                                                              | If you want to print colored text [#45](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/45) [#82](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/82) |
+| `colored`         | bool            	| False	                                                              | If you want to print colored text [#45](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/45) [#82](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/82) |
 | `auto_clear`      | bool            	| True 	                                                              | Create a file rotation handler with interval = 1D and backupCount = 7 [#215](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/215)                                       |
 | `color_palette`   | ColorPalette      | All messages are Fore.RESET except WIN and LOSE bet (GREEN and RED) | Create your custom color palette. Read more above.      	                                                                                                                              |
 | `telegram`        | Telegram          | None                                                                | (Optional) Receive Telegram updates for multiple events list [#233](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/233)                                                           |
@@ -591,6 +634,7 @@ Webhook(
  - `STREAMER_ONLINE`
  - `STREAMER_OFFLINE`
  - `GAIN_FOR_RAID`
+ - `GAIN_FOR_WATCH_STREAK`
  - `GAIN_FOR_CLAIM`
  - `GAIN_FOR_WATCH`
  - `BET_WIN`
@@ -613,7 +657,7 @@ Webhook(
 | `make_predictions` 	| bool        	| True                           	| Choose if you want to make predictions / bet or not                                                                                                  	                                                                            |
 | `follow_raid`      	| bool        	| True                           	| Choose if you want to follow raid +250 points                                                                                                        	                                                                            |
 | `claim_drops`      	| bool        	| True                           	| If this value is True, the script will increase the watch-time for the current game. With this, you can claim the drops from Twitch Inventory [#21](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/21)         |
-| `claim_moments`      	| bool        	| True                           	| If set to True, [moments](https://help.twitch.tv/s/article/moments) will be claimed when available         |
+| `claim_moments`      	| bool        	| True                           	| If set to True, moments will be claimed when available         |
 | `watch_streak`     	| bool        	| True                           	| Choose if you want to change a priority for these streamers and try to catch the Watch Streak event [#11](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/11)                                                   |
 | `community_goals`    | bool          | False                             | If True, contributes the max channel points per stream to the streamers' community challenge goals |
 | `bet`              	| BetSettings 	|  	                                | Rules to follow for the bet                                                                                                                                                                                                       |
@@ -633,6 +677,7 @@ Allowed values for `chat` are:
 | `percentage_gap`   	| int             	| 20      	| Gap difference between outcomesA and outcomesB (for SMART stragegy)                                            	                                                                          |
 | `max_points`       	| int             	| 50000   	| If the x percentage of your channel points is GT bet_max_points set this value                                 	                                                                          |
 | `stealth_mode`     	| bool            	| False   	| If the calculated amount of channel points is GT the highest bet, place the highest value minus 1-2 points [#33](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/33)      |
+| `minimum_points`   	| int             	| None    	| Place the bet only if your channel points are at least this value |
 | `delay_mode` 	        | DelayMode         	| FROM_END	| Define how is calculating the waiting time before placing a bet |
 | `delay` 	        | float             	| 6     	| Value to be used to calculate bet delay depending on `delay_mode` value |
 
@@ -640,7 +685,7 @@ Allowed values for `chat` are:
 
 - **MOST_VOTED**: Select the option most voted based on users count
 - **HIGH_ODDS**: Select the option with the highest odds
-- **PERCENTAGE**: Select the option with the highest percentage based on odds (It's the same that show Twitch) - Should be the same as select LOWEST_ODDS
+- **PERCENTAGE**: Select the option with the highest percentage based on odds (It's the same that show Twitch)
 - **SMART_MONEY**: Select the option with the highest points placed. [#331](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/331)
 - **SMART**: If the majority in percent chose an option, then follow the other users, otherwise select the option with the highest odds
 - **NUMBER_1**: Always select the 1st option, BLUE side if there are only two options
@@ -652,7 +697,7 @@ Allowed values for `chat` are:
 - **NUMBER_7**: Always select the 7th option
 - **NUMBER_8**: Always select the 8th option
 
-![Screenshot](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/prediction.png)
+![Screenshot](assets/prediction.png)
 
 Here a concrete example:
 
@@ -709,7 +754,7 @@ If you want you can toggle the dark theme with the dedicated checkbox.
 
 | Light theme | Dark theme |
 | ----------- | ---------- |
-| ![Light theme](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/chart-analytics-light.png) | ![Dark theme](https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/master/assets/chart-analytics-dark.png) |
+| ![Light theme](assets/chart-analytics-light.png) | ![Dark theme](assets/chart-analytics-dark.png) |
 
 For use this feature just call the `analytics()` method before start mining. Read more at: [#96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96)
 The chart will be autofreshed each `refresh` minutes. If you want to connect from one to second machine that have that webpanel you have to use `0.0.0.0` instead of `127.0.0.1`. With the `days_ago` arg you can select how many days you want to show by default in your analytics graph.
@@ -720,7 +765,7 @@ twitch_miner.analytics(host="127.0.0.1", port=5000, refresh=5, days_ago=7)   # A
 twitch_miner.mine(followers=True, blacklist=["user1", "user2"])
 ```
 
-### `enable_analytics` option in `twitch_minerfile` toggles Analytics needed for the `analytics()` method
+### The `enable_analytics` argument of `TwitchChannelPointsMiner()` must be `True` for the `analytics()` method to work
 
 Disabling Analytics significantly reduces memory consumption and saves some disk space by not creating and writing `/analytics/*.json`.
 

@@ -175,6 +175,17 @@ function Send-Alert {
     if (-not (Test-Path -LiteralPath $AlertConfig)) { return }
     try {
         $cfg = Get-Content -LiteralPath $AlertConfig -Raw | ConvertFrom-Json
+        if ($cfg.appriseUrls -or $cfg.appriseUrgentUrls) {
+            # Apprise (Discord, Telegram, Matrix, ntfy, Pushover, ...) via notify.py; message body on stdin.
+            $ErrorActionPreference = 'Continue'
+            $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+            $a = @((Join-Path $PSScriptRoot 'notify.py'), '--title', $Title, '--priority', "$Priority")
+            if ($Mono) { $a += '--mono' }
+            if ($Url)  { $a += @('--url', $Url); if ($UrlTitle) { $a += @('--url-title', $UrlTitle) } }
+            $out = $Msg | & $Python @a 2>&1 | ForEach-Object { "$_" }
+            if ($LASTEXITCODE -ne 0) { Write-Log "Apprise send failed (exit $LASTEXITCODE): $($out -join ' ')" 'WARN' }
+            return
+        }
         if (-not $cfg.pushoverToken -or -not $cfg.pushoverUser) { return }
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if ($Msg.Length -gt 1000) { $Msg = $Msg.Substring(0, 1000) + '...' }
@@ -274,7 +285,7 @@ function Test-Rollback {
     $good = (Get-Commit $script:GoodCommit -Short)
     if (-not $good) { $good = $script:GoodCommit.Substring(0, 7) }
     Write-Log "Commit $bad crashed $($fast.Count) times in 30 min - rolling back to last good commit $good." 'WARN'
-    $r = Invoke-Native $Git @('-C', $MinerDir, 'reset', '--hard', '--quiet', $script:GoodCommit)
+    $r = Invoke-Native $Git @('-C', $MinerDir, 'reset', '--keep', '--quiet', $script:GoodCommit)
     if ($r.ExitCode -ne 0) {
         Write-Log "Rollback failed: $($r.Output)" 'ERROR'
         Send-Alert "Commit $bad keeps crashing and the rollback to $good failed: $($r.Output)" -Title 'Miner rollback failed' -Priority 1

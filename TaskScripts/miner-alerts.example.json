@@ -1,5 +1,4 @@
 {
-  "pushoverToken": "<APP_TOKEN>",
-  "pushoverUser": "<USER_KEY>",
-  "device": ""
+  "appriseUrls": ["tgram://BOT_TOKEN/CHAT_ID"],
+  "appriseUrgentUrls": ["pover://USER_KEY@APP_TOKEN?priority=emergency"]
 }
