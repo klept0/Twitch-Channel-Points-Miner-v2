@@ -567,8 +567,18 @@ twitch_miner.mine(followers=True)
 ```
 
 The page refreshes every `refresh` minutes and shows `days_ago` days by
-default. Use `host="0.0.0.0"` to open it from another machine. Data is
-stored in `analytics/`.
+default. Data is stored in `analytics/`. The **Log** switch shows the end of
+your log file live.
+
+To open it from another machine, use `host="0.0.0.0"` and set a login, since
+the page shows your log:
+
+```python
+twitch_miner.analytics(host="0.0.0.0", port=5000, auth=("admin", "a-long-password"))
+```
+
+`auth` uses HTTP Basic login, which isn't encrypted. Only use it on your own
+network, or behind an HTTPS reverse proxy.
 
 ## Docker
 

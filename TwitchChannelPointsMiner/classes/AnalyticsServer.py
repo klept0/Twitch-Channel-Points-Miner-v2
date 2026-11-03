@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import os
@@ -13,6 +14,14 @@ from TwitchChannelPointsMiner.utils import download_file
 
 cli.show_server_banner = lambda *_: None
 logger = logging.getLogger(__name__)
+
+# On first load the log viewer only gets the end of the log file, not all of it
+LOG_TAIL_BYTES = 256 * 1024
+
+
+def streamer_name(filename):
+    # Not filename.strip(".json"): strip() removes those characters, so "jackson" became "jack"
+    return filename[: -len(".json")] if filename.endswith(".json") else filename
 
 
 def streamers_available():
@@ -53,51 +62,32 @@ def filter_datas(start_date, end_date, datas):
         else datetime.now()
     ).replace(hour=23, minute=59, second=59).timestamp() * 1000
 
-    original_series = datas["series"]
-
-    if "series" in datas:
-        df = pd.DataFrame(datas["series"])
-        df["datetime"] = pd.to_datetime(df.x // 1000, unit="s")
-
-        df = df[(df.x >= start_date) & (df.x <= end_date)]
-
-        datas["series"] = (
-            df.drop(columns="datetime")
-            .sort_values(by=["x", "y"], ascending=True)
-            .to_dict("records")
-        )
-    else:
-        datas["series"] = []
+    original_series = datas.get("series", [])
+    datas["series"] = sorted(
+        (point for point in original_series if start_date <= point["x"] <= end_date),
+        key=lambda point: (point["x"], point["y"]),
+    )
 
     # If no data is found within the timeframe, that usually means the streamer hasn't streamed within that timeframe
     # We create a series that shows up as a straight line on the dashboard, with 'No Stream' as labels
     if len(datas["series"]) == 0:
-        new_end_date = start_date
-        new_start_date = 0
-        df = pd.DataFrame(original_series)
-        df["datetime"] = pd.to_datetime(df.x // 1000, unit="s")
+        # Use the last known balance from before the provided timeframe, if there is one
+        before = [point for point in original_series if point["x"] <= start_date]
+        if before:
+            last_balance = max(before, key=lambda point: (point["x"], point["y"]))["y"]
+            datas["series"] = [
+                {"x": start_date, "y": last_balance, "z": "No Stream"},
+                {"x": end_date, "y": last_balance, "z": "No Stream"},
+            ]
 
-        # Attempt to get the last known balance from before the provided timeframe
-        df = df[(df.x >= new_start_date) & (df.x <= new_end_date)]
-        last_balance = df.drop(columns="datetime").sort_values(
-            by=["x", "y"], ascending=True).to_dict("records")[-1]['y']
-
-        datas["series"] = [{'x': start_date, 'y': last_balance, 'z': 'No Stream'}, {
-            'x': end_date, 'y': last_balance, 'z': 'No Stream'}]
-
-    if "annotations" in datas:
-        df = pd.DataFrame(datas["annotations"])
-        df["datetime"] = pd.to_datetime(df.x // 1000, unit="s")
-
-        df = df[(df.x >= start_date) & (df.x <= end_date)]
-
-        datas["annotations"] = (
-            df.drop(columns="datetime")
-            .sort_values(by="x", ascending=True)
-            .to_dict("records")
-        )
-    else:
-        datas["annotations"] = []
+    datas["annotations"] = sorted(
+        (
+            annotation
+            for annotation in datas.get("annotations", [])
+            if start_date <= annotation["x"] <= end_date
+        ),
+        key=lambda annotation: annotation["x"],
+    )
 
     return datas
 
@@ -109,8 +99,11 @@ def read_json(streamer, return_response=True):
     path = Settings.analytics_path
     streamer = streamer if streamer.endswith(".json") else f"{streamer}.json"
 
+    # Only plain file names inside the analytics folder ("\" is a separator on Windows)
+    is_plain_name = streamer == os.path.basename(streamer) and "\\" not in streamer
+
     # Check if the file exists before attempting to read it
-    if not os.path.exists(os.path.join(path, streamer)):
+    if not is_plain_name or not os.path.isfile(os.path.join(path, streamer)):
         error_message = f"File '{streamer}' not found."
         logger.error(error_message)
         if return_response:
@@ -137,18 +130,21 @@ def read_json(streamer, return_response=True):
         return filtered_data
 
 
-def get_challenge_points(streamer):
-    datas = read_json(streamer, return_response=False)
-    if "series" in datas and datas["series"]:
-        return datas["series"][-1]["y"]
-    return 0  # Default value when 'series' key is not found or empty
+def last_point(streamer):
+    """Return (last_activity, points) from the newest point of a streamer's series.
 
-
-def get_last_activity(streamer):
-    datas = read_json(streamer, return_response=False)
-    if "series" in datas and datas["series"]:
-        return datas["series"][-1]["x"]
-    return 0  # Default value when 'series' key is not found or empty
+    Reads the file once and skips date filtering: /streamers calls this for every
+    streamer on each page load.
+    """
+    try:
+        with open(os.path.join(Settings.analytics_path, streamer), "r") as file:
+            series = json.load(file).get("series", [])
+    except (OSError, ValueError, AttributeError):
+        return 0, 0
+    if not series:
+        return 0, 0
+    newest = max(series, key=lambda point: (point["x"], point["y"]))
+    return newest["x"], newest["y"]
 
 
 def json_all():
@@ -156,7 +152,7 @@ def json_all():
         json.dumps(
             [
                 {
-                    "name": streamer.strip(".json"),
+                    "name": streamer_name(streamer),
                     "data": read_json(streamer, return_response=False),
                 }
                 for streamer in streamers_available()
@@ -176,17 +172,54 @@ def index(refresh=5, days_ago=7):
 
 
 def streamers():
-    return Response(
-        json.dumps(
-            [
-                {"name": s, "points": get_challenge_points(
-                    s), "last_activity": get_last_activity(s)}
-                for s in sorted(streamers_available())
-            ]
-        ),
-        status=200,
-        mimetype="application/json",
+    result = []
+    for s in sorted(streamers_available()):
+        last_activity, points = last_point(s)
+        result.append({"name": s, "points": points, "last_activity": last_activity})
+    return Response(json.dumps(result), status=200, mimetype="application/json")
+
+
+def find_log_file(username):
+    logs_path = Path().absolute() / "logs"
+    log_file = logs_path / f"{username}.log"
+    if log_file.is_file():
+        return log_file
+    # With auto_clear=False every run writes its own <username>.<timestamp>.log
+    runs = sorted(logs_path.glob(f"{username}.*.log"), key=lambda p: p.stat().st_mtime)
+    return runs[-1] if runs else None
+
+
+def read_log(username):
+    """New log text since the byte offset the page sent.
+
+    The response carries the next offset in X-Log-Offset. X-Log-Reset is 1 when the
+    text starts from the beginning (first load, or the file was rotated), so the
+    page should clear what it shows. A big log is cut to its last LOG_TAIL_BYTES.
+    """
+    log_file = find_log_file(username)
+    if log_file is None:
+        return Response("Log file not found.", status=404, mimetype="text/plain")
+
+    offset = request.args.get("offset", 0, type=int)
+    size = log_file.stat().st_size
+    if offset < 0 or offset > size:  # rotated: the file is new and smaller
+        offset = 0
+
+    with open(log_file, "rb") as file:
+        if offset == 0 and size > LOG_TAIL_BYTES:
+            file.seek(size - LOG_TAIL_BYTES)
+            file.readline()  # start on a whole line
+        else:
+            file.seek(offset)
+        content = file.read()
+        next_offset = file.tell()
+
+    response = Response(
+        content.decode("utf-8", errors="replace"), status=200, mimetype="text/plain"
     )
+    response.headers["X-Log-Offset"] = str(next_offset)
+    response.headers["X-Log-Reset"] = "1" if offset == 0 else "0"
+    return response
 
 
 def download_assets(assets_folder, required_files):
@@ -222,16 +255,22 @@ def check_assets():
                 download_assets(assets_folder, required_files)
                 break
 
-last_sent_log_index = 0
+
+def credentials_match(given, expected):
+    # Constant-time comparison; encode so non-ASCII passwords work too
+    return hmac.compare_digest((given or "").encode(), expected.encode())
+
 
 class AnalyticsServer(Thread):
+
     def __init__(
         self,
         host: str = "127.0.0.1",
         port: int = 5000,
         refresh: int = 5,
         days_ago: int = 7,
-        username: str = None
+        username: str = None,
+        auth: tuple = None,
     ):
         super(AnalyticsServer, self).__init__()
 
@@ -243,32 +282,35 @@ class AnalyticsServer(Thread):
         self.days_ago = days_ago
         self.username = username
 
-        def generate_log():
-            global last_sent_log_index  # Use the global variable
-
-            # Get the last received log index from the client request parameters
-            last_received_index = int(request.args.get("lastIndex", last_sent_log_index))
-
-            logs_path = os.path.join(Path().absolute(), "logs")
-            log_file_path = os.path.join(logs_path, f"{username}.log")
-            try:
-                with open(log_file_path, "r", encoding="utf-8") as log_file:
-                    log_content = log_file.read()
-
-                # Extract new log entries since the last received index
-                new_log_entries = log_content[last_received_index:]
-                last_sent_log_index = len(log_content)  # Update the last sent index
-
-                return Response(new_log_entries, status=200, mimetype="text/plain")
-
-            except FileNotFoundError:
-                return Response("Log file not found.", status=404, mimetype="text/plain")
-
         self.app = Flask(
             __name__,
             template_folder=os.path.join(Path().absolute(), "assets"),
             static_folder=os.path.join(Path().absolute(), "assets"),
         )
+
+        if auth is not None:
+            auth_user, auth_password = auth
+
+            @self.app.before_request
+            def require_login():
+                given = request.authorization
+                if (
+                    given is None
+                    or not credentials_match(given.username, auth_user)
+                    or not credentials_match(given.password, auth_password)
+                ):
+                    return Response(
+                        "Login required.",
+                        status=401,
+                        headers={"WWW-Authenticate": 'Basic realm="Analytics"'},
+                    )
+
+        elif host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                f"Analytics on {host} has no login: anyone who can reach port {port} "
+                "can see your points and your log. Set auth=(user, password)."
+            )
+
         self.app.add_url_rule(
             "/",
             "index",
@@ -284,7 +326,12 @@ class AnalyticsServer(Thread):
         self.app.add_url_rule("/json_all", "json_all",
                               json_all, methods=["GET"])
         self.app.add_url_rule(
-            "/log", "log", generate_log, methods=["GET"])
+            "/log",
+            "log",
+            read_log,
+            defaults={"username": username},
+            methods=["GET"],
+        )
 
     def run(self):
         logger.info(
