@@ -160,8 +160,9 @@ twitch_miner = TwitchChannelPointsMiner(
     enable_analytics=False,                     # Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,        # Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign
-    drops_fallback=False,                       # Finish a started drop on another live channel when its streamer goes offline
+    drops_fallback=False,                       # Watch other live channels for drops (started drops and games in drops.json)
     drops_fallback_wait=15,                     # Minutes to wait for the streamer to come back first
+    drops_games_file="drops.json",              # Optional game list: priority, exclude, priority_mode
     logger_settings=LoggerSettings(
         save=True,                              # If you want to save logs in a file (suggested)
         console_level=logging.INFO,             # Level of logs - use logging.DEBUG for more info
@@ -295,8 +296,9 @@ defaults.
 | `priority` | list | `[STREAK, DROPS, ORDER]` | Who to watch first (below) |
 | `logger_settings` | LoggerSettings | | [Logging and notifications](#loggersettings) |
 | `streamer_settings` | StreamerSettings | | [Defaults for every streamer](#streamersettings) |
-| `drops_fallback` | bool | `False` | Finish a started drop on another live channel when its streamer goes offline (below) |
-| `drops_fallback_wait` | int | `15` | Minutes to wait for a listed streamer to stream the campaign again first |
+| `drops_fallback` | bool | `False` | Watch other live channels for drops: finish started drops and mine the games in `drops.json` ([below](#drops-on-other-channels)) |
+| `drops_fallback_wait` | int | `15` | Minutes to wait for a listed streamer to stream a started campaign again first |
+| `drops_games_file` | str | `"drops.json"` | Game list for `drops_fallback` |
 
 `mine()` takes the streamer list (order = priority), `followers`,
 `followers_order` (`FollowersOrder.ASC` or `DESC`, by follow date) and
@@ -320,15 +322,49 @@ all watch streaks are caught.
 
 `ORDER` and `POINTS_ASCENDING` together don't make sense.
 
-With `drops_fallback=True` (needs `DROPS` in `priority`), a drop that a
-listed streamer started but stopped streaming is finished on another channel:
-after `drops_fallback_wait` minutes without a listed streamer streaming the
-campaign, the miner watches one live channel of that game that has the
-campaign. That channel is watched for drops only (no chat, points or bets)
-and is never added to your list. It is dropped again when the drop is
-finished, a listed streamer streams the campaign again, it goes offline, or
-Twitch credits no progress for 20 minutes. Campaigns are remembered in
+### Drops on other channels
+
+With `drops_fallback=True` (needs `DROPS` in `priority`), the miner can watch
+one live channel that is not in your list, for drops only (no chat, points or
+bets). The channel is never added to your list. It is used for:
+
+- **Started drops**: a listed streamer started a campaign but has not streamed
+  it for `drops_fallback_wait` minutes (for example, they went offline).
+- **Games in `drops.json`**: campaigns of games in its `priority` list are
+  mined even when none of your streamers plays them, including drops not
+  started yet.
+
+The miner looks up live channels of the game with drops enabled and picks the
+first one that has the campaign. It stops watching it when the drop is
+finished, a listed streamer streams the campaign again, the game is removed
+from `drops.json`, the channel goes offline, or Twitch credits no progress for
+20 minutes (that channel is then skipped for the campaign). Only one such
+channel is watched at a time, and it still counts toward the two-stream limit.
+Campaigns your streamers progressed are remembered in
 `cookies/<username>.drops-fallback.json`.
+
+`drops.json` is optional and is re-read when it changes, no restart needed:
+
+```json
+{
+    "priority": ["Tom Clancy's The Division 2", "Rocket League"],
+    "exclude": ["Fortnite"],
+    "priority_mode": "priority_only"
+}
+```
+
+| Key | Description |
+| :-- | :-- |
+| `priority` | Game names (as shown on Twitch), most wanted first. The first 10 are also searched for new campaigns every 30 minutes |
+| `exclude` | Games never watched on other channels |
+| `priority_mode` | `priority_only`: only games in `priority`. `ending_soonest`: all games, `priority` first, then the campaign that ends first. `low_availability`: same, then the campaign with the least spare time. `0`, `1`, `2` also work |
+
+Without `drops.json`, every game is allowed for started drops and no new
+campaigns are searched. Lists may also be written as
+`{"__type": "set", "data": [...]}` and hold up to 200 names. Entries that are
+not short, printable names are ignored. If the file can't be read, the
+previous list is kept, or no game is allowed if there is none yet, and a
+warning is logged.
 
 ### LoggerSettings
 

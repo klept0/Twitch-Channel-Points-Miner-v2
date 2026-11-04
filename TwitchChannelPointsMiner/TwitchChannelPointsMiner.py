@@ -89,6 +89,8 @@ class TwitchChannelPointsMiner:
         # offline for drops_fallback_wait minutes (needs Priority.DROPS)
         drops_fallback: bool = False,
         drops_fallback_wait: int = 15,
+        # Optional game list (priority, exclude, priority_mode), re-read on change
+        drops_games_file: str = "drops.json",
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -143,6 +145,7 @@ class TwitchChannelPointsMiner:
         user_agent = get_user_agent("CHROME")
         self.twitch = Twitch(self.username, user_agent, password)
         self.twitch.drops_fallback_wait = drops_fallback_wait
+        self.twitch.drops_games_file = os.path.abspath(drops_games_file)
 
         self.claim_drops_startup = claim_drops_startup
         self.priority = priority if isinstance(priority, list) else [priority]

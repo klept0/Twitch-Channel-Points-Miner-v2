@@ -244,6 +244,11 @@ class GQLOperations:
         "query": "query DirectoryDropsStreams($id: ID!, $first: Int!) { game(id: $id) { streams(first: $first, options: {systemFilters: [DROPS_ENABLED], sort: VIEWER_COUNT}) { edges { node { id broadcaster { id login } } } } } }",
         "variables": {},
     }
+    DirectoryDropsStreamsByName = {
+        "operationName": "DirectoryDropsStreamsByName",
+        "query": "query DirectoryDropsStreamsByName($name: String!, $first: Int!) { game(name: $name) { streams(first: $first, options: {systemFilters: [DROPS_ENABLED], sort: VIEWER_COUNT}) { edges { node { id broadcaster { id login } } } } } }",
+        "variables": {},
+    }
     # Raw query text used when a persisted query hash is rejected
     # (PersistedQueryNotFound). Twitch ignores unused variables.
     raw_queries = {

@@ -24,7 +24,11 @@ from typing import Dict, Any
 # from base64 import urlsafe_b64decode
 # from datetime import datetime
 
-from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign, parse_datetime
+from TwitchChannelPointsMiner.classes.entities.Campaign import (
+    Campaign,
+    parse_datetime,
+    utc_now,
+)
 from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoal
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
@@ -88,6 +92,9 @@ class Twitch(object):
         "drops_fallback_info",
         "drops_fallback_seen",
         "drops_fallback_file",
+        "drops_games_file",
+        "drops_games",
+        "drops_games_mtime",
         "drops_fallback_searched",
         "drops_fallback_rejected",
     ]
@@ -135,6 +142,11 @@ class Twitch(object):
         self.drops_fallback_searched = {}
         # campaign id -> logins that did not get progress credited
         self.drops_fallback_rejected = {}
+        # Optional game list (priority / exclude / priority_mode), re-read when it
+        # changes; None = every game allowed
+        self.drops_games_file = os.path.join(Path().absolute(), "drops.json")
+        self.drops_games = None
+        self.drops_games_mtime = None
         # self.integrity = None
         # self.integrity_expire = 0
         self.client_session = token_hex(16)
@@ -198,7 +210,8 @@ class Twitch(object):
             headers = {"User-Agent": USER_AGENTS["Linux"]["FIREFOX"]}
 
             main_page_request = requests.get(
-                streamer.streamer_url, headers=headers, timeout=20)
+                streamer.streamer_url, headers=headers, timeout=20
+            )
             response = main_page_request.text
             # logger.info(response)
             regex_settings = "(https://static.twitchcdn.net/config/settings.*?js|https://assets.twitch.tv/config/settings.*?.js)"
@@ -592,7 +605,10 @@ class Twitch(object):
 
                 for index in streamers_index:
                     # Fallback channels are refreshed by the sync thread only
-                    if index < listed and (streamers[index].stream.update_elapsed() / 60) > 10:
+                    if (
+                        index < listed
+                        and (streamers[index].stream.update_elapsed() / 60) > 10
+                    ):
                         # Why this user It's currently online but the last updated was more than 10minutes ago?
                         # Please perform a manually update and check if the user it's online
                         self.check_streamer_online(streamers[index])
@@ -615,14 +631,13 @@ class Twitch(object):
 
                     if prior == Priority.ORDER:
                         # Get the first 2 items, they are already in order
-                        streamers_watching.update(listed_index[:remaining_watch_amount()])
+                        streamers_watching.update(
+                            listed_index[: remaining_watch_amount()]
+                        )
 
                     elif prior in [Priority.POINTS_ASCENDING, Priority.POINTS_DESCENDING]:
                         items = [
-                            {
-                                "points": streamers[index].channel_points,
-                                "index": index
-                            }
+                            {"points": streamers[index].channel_points, "index": index}
                             for index in listed_index
                         ]
                         items = sorted(
@@ -1371,6 +1386,13 @@ class Twitch(object):
                         for c in self.__get_inventory_campaigns()
                         if c.get("status") == "ACTIVE" and c.get("id") not in known_ids
                     ]
+                    # The client cannot list campaigns that are not started; read
+                    # them from live channels of the games in the priority list
+                    if self.drops_fallback is True:
+                        try:
+                            self.__discover_drops_campaigns()
+                        except Exception as e:  # must never stop campaign syncing
+                            logger.error(f"Error discovering drop campaigns: {e}")
                     # Campaigns seen on channels but not started yet are not in the
                     # inventory; add them so their streams can be matched
                     known_ids = {c["id"] for c in campaigns_details if c}
@@ -1434,12 +1456,13 @@ class Twitch(object):
 
     # === DROPS FALLBACK === #
     @staticmethod
-    def __drops_fallback_needed(campaign):
-        """True if a drop of the campaign is started, not finished and can still
-        be finished before it ends."""
+    def __drops_fallback_needed(campaign, unstarted=False):
+        """True if a drop of the campaign is not finished and can still be
+        finished before it ends. Only started drops count unless unstarted."""
         return any(
             drop.is_claimed is False
-            and 0 < drop.current_minutes_watched < drop.minutes_required
+            and drop.current_minutes_watched < drop.minutes_required
+            and (unstarted or drop.current_minutes_watched > 0)
             and drop.can_finish(campaign.end_at)
             for drop in campaign.drops
         )
@@ -1466,19 +1489,202 @@ class Twitch(object):
         except OSError as e:
             logger.warning(f"Could not save {self.drops_fallback_file}: {e}")
 
+    # Game list for drops mining: priority (ordered), exclude, priority_mode.
+    # Modes may also be given by number
+    DROPS_PRIORITY_MODES = {
+        0: "priority_only",
+        1: "ending_soonest",
+        2: "low_availability",
+    }
+    DROPS_GAMES_MAX_BYTES = 256 * 1024
+    DROPS_GAMES_MAX_ENTRIES = 200
+    DROPS_GAME_NAME_MAX_LENGTH = 100
+
+    def __load_drops_games(self):
+        """(Re)loads drops_games_file when it changed. No file: every game allowed."""
+        try:
+            mtime = os.path.getmtime(self.drops_games_file)
+            if os.path.getsize(self.drops_games_file) > self.DROPS_GAMES_MAX_BYTES:
+                raise ValueError("file is too large")
+        except ValueError as e:
+            if mtime != self.drops_games_mtime:
+                self.drops_games_mtime = mtime
+                self.__drops_games_unreadable(e)
+            return
+        except OSError:
+            if self.drops_games is not None:
+                logger.info(
+                    f"Drops fallback: {self.drops_games_file} removed, all games allowed"
+                )
+            self.drops_games = None
+            self.drops_games_mtime = None
+            return
+        if mtime == self.drops_games_mtime:
+            return
+        self.drops_games_mtime = mtime
+        try:
+            with open(self.drops_games_file, encoding="utf-8") as f:
+                self.drops_games = self.__parse_drops_games(json.load(f))
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            self.__drops_games_unreadable(e)
+            return
+        logger.info(
+            f"Drops fallback: loaded {self.drops_games_file} "
+            f"({len(self.drops_games['priority'])} priority, "
+            f"{len(self.drops_games['exclude'])} excluded, "
+            f"{self.drops_games['mode']})"
+        )
+        if (
+            self.drops_games["mode"] == "priority_only"
+            and not self.drops_games["priority"]
+        ):
+            logger.warning(
+                "Drops fallback: priority_only with an empty priority list "
+                "allows no game"
+            )
+
+    def __drops_games_unreadable(self, error):
+        """Keeps the previous list; with none yet, allows no game rather than all."""
+        if self.drops_games is None:
+            self.drops_games = {
+                "priority_names": [],
+                "priority": [],
+                "exclude": set(),
+                "mode": "priority_only",
+            }
+            logger.warning(
+                f"Drops fallback: could not read {self.drops_games_file}, "
+                f"no game is allowed until it is fixed: {error}"
+            )
+        else:
+            logger.warning(
+                f"Drops fallback: could not read {self.drops_games_file}, "
+                f"keeping the previous game list: {error}"
+            )
+
+    @classmethod
+    def __parse_drops_games(cls, data):
+        """Validates the game list. Lists may also be wrapped as
+        {"__type": ..., "data": [...]} and the mode as {"__type": ..., "data": 0}.
+        Entries that are not short, printable strings are dropped."""
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+
+        def names(key):
+            value = data.get(key) or []
+            if isinstance(value, dict):
+                value = value.get("data") or []
+            if not isinstance(value, list):
+                raise ValueError(f"'{key}' must be a list of game names")
+            if len(value) > cls.DROPS_GAMES_MAX_ENTRIES:
+                raise ValueError(
+                    f"'{key}' has more than {cls.DROPS_GAMES_MAX_ENTRIES} entries"
+                )
+            result = []
+            for name in value:
+                if not isinstance(name, str):
+                    continue
+                name = " ".join(name.split())
+                if (
+                    name
+                    and len(name) <= cls.DROPS_GAME_NAME_MAX_LENGTH
+                    and name.isprintable()
+                    and name not in result
+                ):
+                    result.append(name)
+            return result
+
+        mode = data.get("priority_mode", "priority_only")
+        if isinstance(mode, dict):
+            mode = mode.get("data", 0)
+        if isinstance(mode, str):
+            mode = mode.strip().lower()
+        mode = cls.DROPS_PRIORITY_MODES.get(mode, mode)
+        if mode not in cls.DROPS_PRIORITY_MODES.values():
+            raise ValueError(f"unknown priority_mode {str(mode)[:30]!r}")
+        priority_names = names("priority")
+        return {
+            # Display names for directory lookups, lowercase ones for matching
+            "priority_names": priority_names,
+            "priority": [name.lower() for name in priority_names],
+            "exclude": {name.lower() for name in names("exclude")},
+            "mode": mode,
+        }
+
+    @staticmethod
+    def __campaign_game_names(campaign):
+        game = campaign.game or {}
+        return {
+            " ".join(str(game[key]).split()).lower()
+            for key in ("name", "displayName")
+            if game.get(key)
+        }
+
+    def __drops_game_listed(self, campaign):
+        return self.drops_games is not None and bool(
+            self.__campaign_game_names(campaign) & set(self.drops_games["priority"])
+        )
+
+    def __drops_game_rank(self, campaign, now):
+        """Sort key for a campaign's fallback, or None if its game is not allowed:
+        priority list position first (unlisted games after it), then by mode."""
+        if self.drops_games is None:
+            return (0, 0)
+        names = self.__campaign_game_names(campaign)
+        if names & self.drops_games["exclude"]:
+            return None
+        priority = self.drops_games["priority"]
+        position = min(
+            (priority.index(name) for name in names if name in priority),
+            default=None,
+        )
+        if position is None:
+            if self.drops_games["mode"] == "priority_only":
+                return None
+            position = len(priority)
+        end_at = campaign.end_at.timestamp()
+        if self.drops_games["mode"] == "ending_soonest":
+            return (position, end_at)
+        if self.drops_games["mode"] == "low_availability":
+            # Spare time: time left minus the minutes still needed
+            needed = min(
+                (
+                    drop.minutes_required - drop.current_minutes_watched
+                    for drop in campaign.drops
+                    if drop.is_claimed is False
+                ),
+                default=0,
+            )
+            return (position, end_at - now - needed * 60)
+        return (position, 0)
+
     def __update_drops_fallback(self, streamers, campaigns):
-        """Finishes a started drop when its channel goes offline: after
-        drops_fallback_wait minutes without a listed streamer streaming the
-        campaign, watches one other live channel that has it, for drops only.
-        Only campaigns a listed streamer has progressed qualify (kept across
-        restarts in drops_fallback_file; after a restart the wait counts from
-        startup). The channel is released when the campaign no longer needs it, a
-        listed streamer has the campaign again, it goes offline, or Twitch credits
-        no progress for 20 minutes."""
+        """Watches one channel outside the streamer list to progress a drop that no
+        listed streamer is streaming, for drops only (no chat, points or bets).
+
+        A campaign qualifies when it has a drop that can still be finished and
+        - a listed streamer progressed it but has not streamed it for
+          drops_fallback_wait minutes (seen campaigns are kept across restarts in
+          drops_fallback_file; after a restart the wait counts from startup), or
+        - its game is in the priority list of drops_games_file; then drops not
+          started yet count too and there is no wait.
+        Games in the exclude list never qualify; with priority_only, only listed
+        games do. Candidates are ordered by priority list position, then by mode.
+
+        The channel is released when the campaign no longer needs it, a listed
+        streamer streams it again, its game is no longer allowed, it goes offline
+        or cannot be checked, or Twitch credits no progress for 20 minutes."""
         if campaigns == []:
             return  # sync failed or nothing to do; keep the current fallback
+        self.__load_drops_games()
         now = time.time()
         by_id = {campaign.id: campaign for campaign in campaigns}
+
+        # Forget campaigns that are no longer active
+        stale = [key for key in self.drops_fallback_seen if key not in by_id]
+        for cache in (self.drops_fallback_searched, self.drops_fallback_rejected):
+            for key in [key for key in cache if key not in by_id]:
+                del cache[key]
 
         covered = set()
         new_seen = False
@@ -1488,23 +1694,31 @@ class Twitch(object):
                     covered.add(campaign.id)
                     new_seen = new_seen or campaign.id not in self.drops_fallback_seen
                     self.drops_fallback_seen[campaign.id] = now
-        if new_seen:
+        for key in stale:
+            del self.drops_fallback_seen[key]
+        if new_seen or stale:
             self.__save_drops_fallback_seen()
 
         for streamer in list(self.fallback_streamers):
             info = self.drops_fallback_info[streamer.username]
             campaign = by_id.get(info["campaign_id"])
             reason = None
-            if campaign is None or not self.__drops_fallback_needed(campaign):
+            if campaign is None or not self.__drops_fallback_needed(
+                campaign, unstarted=self.__drops_game_listed(campaign)
+            ):
                 reason = "the drop is finished"
             elif campaign.id in covered:
                 reason = "a listed streamer is streaming the campaign again"
+            elif self.__drops_game_rank(campaign, now) is None:
+                reason = "its game is no longer allowed by the game list"
             else:
                 try:
                     self.check_streamer_online(streamer)
                     checked = True
                 except Exception as e:  # e.g. the channel was deleted or banned
-                    logger.debug(f"Drops fallback: check of {streamer.username} failed: {e}")
+                    logger.debug(
+                        f"Drops fallback: check of {streamer.username} failed: {e}"
+                    )
                     checked = False
                 progress = self.__campaign_progress(campaign)
                 if checked is False:
@@ -1533,21 +1747,33 @@ class Twitch(object):
         if self.fallback_streamers != []:
             return  # one fallback channel at a time
 
+        candidates = []
         for campaign in campaigns:
-            seen = self.drops_fallback_seen.get(campaign.id)
-            if (
-                seen is None
-                or campaign.id in covered
-                or now - seen < self.drops_fallback_wait * 60
-                or now - self.drops_fallback_searched.get(campaign.id, 0) < 10 * 60
-                or not self.__drops_fallback_needed(campaign)
+            listed_game = self.__drops_game_listed(campaign)
+            if campaign.id in covered or not self.__drops_fallback_needed(
+                campaign, unstarted=listed_game
             ):
                 continue
+            rank = self.__drops_game_rank(campaign, now)
+            if rank is None:
+                continue
+            seen = self.drops_fallback_seen.get(campaign.id)
+            if seen is None and not listed_game:
+                continue
+            if (
+                seen is not None and now - seen < self.drops_fallback_wait * 60
+            ) or now - self.drops_fallback_searched.get(campaign.id, 0) < 10 * 60:
+                continue
+            candidates.append((rank, campaign, seen))
+
+        # Each search costs a directory query and up to 5 channel checks
+        for rank, campaign, seen in sorted(candidates, key=lambda x: x[0])[:3]:
             self.drops_fallback_searched[campaign.id] = now
             streamer = self.__find_drops_fallback(campaign, streamers)
             if streamer is None:
                 logger.info(
-                    f"Drops fallback: no other live channel has {campaign.name}"
+                    f"Drops fallback: no other live channel has "
+                    f"{self.__log_name(campaign.name)}"
                 )
                 # Search again in 30 minutes instead of 10
                 self.drops_fallback_searched[campaign.id] = now + 20 * 60
@@ -1558,33 +1784,65 @@ class Twitch(object):
                 "progress_at": now,
             }
             self.fallback_streamers.append(streamer)
+            why = (
+                f"no listed streamer has streamed it for {int((now - seen) // 60)} min"
+                if seen is not None
+                else "its game is in the priority list"
+            )
             logger.info(
-                f"Drops fallback: no listed streamer has streamed {campaign.name} "
-                f"for {int((now - seen) // 60)} min, watching {streamer.username} "
-                f"until the drop is finished"
+                f"Drops fallback: watching {streamer.username} for "
+                f"{self.__log_name(campaign.name)} "
+                f"({why}) until the drop is finished"
             )
             return
+
+    # Twitch logins and numeric channel ids, to reject anything unexpected
+    LOGIN_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
+    CHANNEL_ID_PATTERN = re.compile(r"[0-9]{1,20}")
+
+    @staticmethod
+    def __log_name(name, limit=100):
+        """Twitch-supplied text for a log line: one line, printable, bounded."""
+        text = " ".join(str(name).split())
+        text = "".join(char for char in text if char.isprintable())
+        return text[:limit]
+
+    def __drops_directory(self, game_id=None, game_name=None, first=20):
+        """Live drops-enabled channels of a game, most viewers first, as
+        (login, channel_id) pairs. Malformed entries are skipped."""
+        if game_id is not None:
+            json_data = copy.deepcopy(GQLOperations.DirectoryDropsStreams)
+            json_data["variables"] = {"id": str(game_id), "first": first}
+        else:
+            json_data = copy.deepcopy(GQLOperations.DirectoryDropsStreamsByName)
+            json_data["variables"] = {"name": game_name, "first": first}
+        response = self.post_gql_request(json_data)
+        data = response.get("data") if isinstance(response, dict) else None
+        game = (data or {}).get("game") or {}
+        edges = (game.get("streams") or {}).get("edges") or []
+        channels = []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            broadcaster = (edge.get("node") or {}).get("broadcaster") or {}
+            login = str(broadcaster.get("login") or "").lower()
+            channel_id = str(broadcaster.get("id") or "")
+            if self.LOGIN_PATTERN.fullmatch(
+                login
+            ) and self.CHANNEL_ID_PATTERN.fullmatch(channel_id):
+                channels.append((login, channel_id))
+        return channels
 
     def __find_drops_fallback(self, campaign, streamers, max_checks=5):
         """Returns a live, not listed channel that has the campaign, or None."""
         game_id = (campaign.game or {}).get("id")
         if game_id is None:
             return None
-        json_data = copy.deepcopy(GQLOperations.DirectoryDropsStreams)
-        json_data["variables"] = {"id": game_id, "first": 20}
-        response = self.post_gql_request(json_data)
-        data = response.get("data") if isinstance(response, dict) else None
-        game = (data or {}).get("game") or {}
-        edges = (game.get("streams") or {}).get("edges") or []
-
         listed = {streamer.username for streamer in streamers}
         rejected = self.drops_fallback_rejected.get(campaign.id, set())
         checks = 0
-        for edge in edges:
-            broadcaster = ((edge or {}).get("node") or {}).get("broadcaster") or {}
-            login = (broadcaster.get("login") or "").lower()
-            channel_id = broadcaster.get("id")
-            if not login or not channel_id or login in listed or login in rejected:
+        for login, channel_id in self.__drops_directory(game_id=game_id):
+            if login in listed or login in rejected:
                 continue
             if checks >= max_checks:
                 break
@@ -1610,6 +1868,42 @@ class Twitch(object):
                 streamer.stream.campaigns = [campaign]
                 return streamer
         return None
+
+    def __discover_drops_campaigns(self, max_games=10, max_channels=3):
+        """Reads the campaigns of a few live drops-enabled channels of each game in
+        the priority list, so campaigns not started yet are known to the sync."""
+        self.__load_drops_games()
+        if self.drops_games is None:
+            return
+        # Campaigns read from channels are kept until they end
+        now = utc_now()
+        for campaign_id, campaign in list(self.channel_campaigns.items()):
+            try:
+                ended = parse_datetime(campaign["endAt"]) < now
+            except (KeyError, TypeError, ValueError):
+                ended = True
+            if ended:
+                self.channel_campaigns.pop(campaign_id, None)
+        for name in self.drops_games["priority_names"][:max_games]:
+            if name.lower() in self.drops_games["exclude"]:
+                continue
+            try:
+                channels = self.__drops_directory(game_name=name)[:max_channels]
+                for login, channel_id in channels:
+                    channel = Streamer(login)
+                    channel.channel_id = channel_id
+                    # Adds the channel's campaigns to self.channel_campaigns
+                    self.__get_campaign_ids_from_streamer(channel)
+            except Exception as e:  # one game must not stop the others
+                logger.debug(
+                    f"Drops fallback: discovery failed for "
+                    f"{self.__log_name(name)}: {e}"
+                )
+                continue
+            logger.debug(
+                f"Drops fallback: checked {len(channels)} live channels of "
+                f"{self.__log_name(name)}"
+            )
 
     def contribute_to_community_goals(self, streamer):
         # Don't bother doing the request if no goal is currently started or in stock
