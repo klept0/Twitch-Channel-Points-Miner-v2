@@ -133,7 +133,8 @@ class Twitch(object):
         self.drops_fallback = False
         self.drops_fallback_wait = 15  # minutes
         self.fallback_streamers = []
-        # login -> {"campaign_id", "progress", "progress_at"}
+        # login -> {"campaign_id", "progress", "watched", "watched_at_progress",
+        # "sent_at"}
         self.drops_fallback_info = {}
         # campaign id -> last time a listed streamer was online with it. The ids
         # are kept across restarts; loaded ones count as seen at startup
@@ -840,6 +841,8 @@ class Twitch(object):
                         )
                         if response.status_code == 204:
                             streamers[index].stream.update_minute_watched()
+                            if index >= listed:
+                                self.__count_fallback_watch(streamers[index])
 
                             """
                             Remember, you can only earn progress towards a time-based Drop on one participating channel at a time.  [ ! ! ! ]
@@ -1658,6 +1661,17 @@ class Twitch(object):
             return (position, end_at - now - needed * 60)
         return (position, 0)
 
+    def __count_fallback_watch(self, streamer):
+        """Called by the minute watcher after a minute-watched event was accepted
+        for a fallback channel. Gaps of more than a minute are not counted."""
+        info = self.drops_fallback_info.get(streamer.username)
+        if info is None:
+            return
+        now = time.time()
+        if info["sent_at"] is not None:
+            info["watched"] += min(now - info["sent_at"], 60)
+        info["sent_at"] = now
+
     def __update_drops_fallback(self, streamers, campaigns):
         """Watches one channel outside the streamer list to progress a drop that no
         listed streamer is streaming, for drops only (no chat, points or bets).
@@ -1729,8 +1743,10 @@ class Twitch(object):
                     reason = "it no longer has the campaign"
                 elif progress != info["progress"]:
                     info["progress"] = progress
-                    info["progress_at"] = now
-                elif now - info["progress_at"] > 20 * 60:
+                    info["watched_at_progress"] = info["watched"]
+                elif info["watched"] - info["watched_at_progress"] >= 20 * 60:
+                    # Counted only while it is actually watched: watch streaks
+                    # or listed drop streamers may hold both slots for a while
                     reason = "Twitch credited no progress for 20 minutes"
                     self.drops_fallback_rejected.setdefault(campaign.id, set()).add(
                         streamer.username
@@ -1781,7 +1797,10 @@ class Twitch(object):
             self.drops_fallback_info[streamer.username] = {
                 "campaign_id": campaign.id,
                 "progress": self.__campaign_progress(campaign),
-                "progress_at": now,
+                # Seconds actually watched, and that count at the last progress
+                "watched": 0,
+                "watched_at_progress": 0,
+                "sent_at": None,
             }
             self.fallback_streamers.append(streamer)
             why = (
