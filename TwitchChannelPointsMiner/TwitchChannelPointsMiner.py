@@ -85,6 +85,10 @@ class TwitchChannelPointsMiner:
         logger_settings: LoggerSettings = LoggerSettings(),
         # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
+        # Finish a started drop on another live channel when its streamer goes
+        # offline for drops_fallback_wait minutes (needs Priority.DROPS)
+        drops_fallback: bool = False,
+        drops_fallback_wait: int = 15,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -138,9 +142,14 @@ class TwitchChannelPointsMiner:
         # user_agent = get_user_agent("FIREFOX")
         user_agent = get_user_agent("CHROME")
         self.twitch = Twitch(self.username, user_agent, password)
+        self.twitch.drops_fallback_wait = drops_fallback_wait
 
         self.claim_drops_startup = claim_drops_startup
         self.priority = priority if isinstance(priority, list) else [priority]
+        # Only the DROPS priority watches fallback channels
+        self.twitch.drops_fallback = drops_fallback and Priority.DROPS in self.priority
+        if drops_fallback and not self.twitch.drops_fallback:
+            logger.warning("drops_fallback needs Priority.DROPS in priority; it is off")
 
         self.streamers: list[Streamer] = []
         self.events_predictions = {}

@@ -160,6 +160,8 @@ twitch_miner = TwitchChannelPointsMiner(
     enable_analytics=False,                     # Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,        # Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign
+    drops_fallback=False,                       # Finish a started drop on another live channel when its streamer goes offline
+    drops_fallback_wait=15,                     # Minutes to wait for the streamer to come back first
     logger_settings=LoggerSettings(
         save=True,                              # If you want to save logs in a file (suggested)
         console_level=logging.INFO,             # Level of logs - use logging.DEBUG for more info
@@ -293,6 +295,8 @@ defaults.
 | `priority` | list | `[STREAK, DROPS, ORDER]` | Who to watch first (below) |
 | `logger_settings` | LoggerSettings | | [Logging and notifications](#loggersettings) |
 | `streamer_settings` | StreamerSettings | | [Defaults for every streamer](#streamersettings) |
+| `drops_fallback` | bool | `False` | Finish a started drop on another live channel when its streamer goes offline (below) |
+| `drops_fallback_wait` | int | `15` | Minutes to wait for a listed streamer to stream the campaign again first |
 
 `mine()` takes the streamer list (order = priority), `followers`,
 `followers_order` (`FollowersOrder.ASC` or `DESC`, by follow date) and
@@ -315,6 +319,16 @@ all watch streaks are caught.
 | `POINTS_DESCENDING` | Streamers where you have the most points |
 
 `ORDER` and `POINTS_ASCENDING` together don't make sense.
+
+With `drops_fallback=True` (needs `DROPS` in `priority`), a drop that a
+listed streamer started but stopped streaming is finished on another channel:
+after `drops_fallback_wait` minutes without a listed streamer streaming the
+campaign, the miner watches one live channel of that game that has the
+campaign. That channel is watched for drops only (no chat, points or bets)
+and is never added to your list. It is dropped again when the drop is
+finished, a listed streamer streams the campaign again, it goes offline, or
+Twitch credits no progress for 20 minutes. Campaigns are remembered in
+`cookies/<username>.drops-fallback.json`.
 
 ### LoggerSettings
 

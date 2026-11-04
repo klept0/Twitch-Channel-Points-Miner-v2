@@ -27,6 +27,11 @@ from typing import Dict, Any
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign, parse_datetime
 from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoal
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
+from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    ChatPresence,
+    Streamer,
+    StreamerSettings,
+)
 from TwitchChannelPointsMiner.classes.Exceptions import (
     StreamerDoesNotExistException,
     StreamerIsOfflineException,
@@ -77,6 +82,14 @@ class Twitch(object):
         "accepted_drop_claims",
         "drops_claim_lock",
         "channel_campaigns",
+        "drops_fallback",
+        "drops_fallback_wait",
+        "fallback_streamers",
+        "drops_fallback_info",
+        "drops_fallback_seen",
+        "drops_fallback_file",
+        "drops_fallback_searched",
+        "drops_fallback_rejected",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -85,6 +98,9 @@ class Twitch(object):
         self.cookies_file = os.path.join(cookies_path, f"{username}.pkl")
         self.drop_claims_file = os.path.join(
             cookies_path, f"{username}.drop-claims.json"
+        )
+        self.drops_fallback_file = os.path.join(
+            cookies_path, f"{username}.drops-fallback.json"
         )
         self.user_agent = user_agent
         self.device_id = "".join(
@@ -104,6 +120,21 @@ class Twitch(object):
         self.drops_claim_lock = threading.Lock()
         # Campaigns seen on channels (DropChannelCampaignsProgress), by campaign id
         self.channel_campaigns = {}
+        # Drops fallback (see __update_drops_fallback): when no listed streamer is
+        # streaming a started campaign any more, watch another live channel that has
+        # it. Fallback channels are never added to the streamer list
+        self.drops_fallback = False
+        self.drops_fallback_wait = 15  # minutes
+        self.fallback_streamers = []
+        # login -> {"campaign_id", "progress", "progress_at"}
+        self.drops_fallback_info = {}
+        # campaign id -> last time a listed streamer was online with it. The ids
+        # are kept across restarts; loaded ones count as seen at startup
+        self.drops_fallback_seen = self.__load_drops_fallback_seen()
+        # campaign id -> last directory search
+        self.drops_fallback_searched = {}
+        # campaign id -> logins that did not get progress credited
+        self.drops_fallback_rejected = {}
         # self.integrity = None
         # self.integrity_expire = 0
         self.client_session = token_hex(16)
@@ -167,13 +198,13 @@ class Twitch(object):
             headers = {"User-Agent": USER_AGENTS["Linux"]["FIREFOX"]}
 
             main_page_request = requests.get(
-                streamer.streamer_url, headers=headers)
+                streamer.streamer_url, headers=headers, timeout=20)
             response = main_page_request.text
             # logger.info(response)
             regex_settings = "(https://static.twitchcdn.net/config/settings.*?js|https://assets.twitch.tv/config/settings.*?.js)"
             settings_url = re.search(regex_settings, response).group(1)
 
-            settings_request = requests.get(settings_url, headers=headers)
+            settings_request = requests.get(settings_url, headers=headers, timeout=20)
             response = settings_request.text
             regex_spade = '"spade_url":"(.*?)"'
             streamer.stream.spade_url = re.search(
@@ -542,9 +573,13 @@ class Twitch(object):
             except Exception as e:  # a failed notification must never stop watching
                 logger.debug(f"Drop status notification failed: {e}")
 
-    def send_minute_watched_events(self, streamers, priority, chunk_size=3):
+    def send_minute_watched_events(self, listed_streamers, priority, chunk_size=3):
         while self.running:
             try:
+                # Drops fallback channels go after the listed streamers; only the
+                # DROPS priority may pick them
+                listed = len(listed_streamers)
+                streamers = list(listed_streamers) + list(self.fallback_streamers)
                 streamers_index = [
                     i
                     for i in range(0, len(streamers))
@@ -556,10 +591,13 @@ class Twitch(object):
                 ]
 
                 for index in streamers_index:
-                    if (streamers[index].stream.update_elapsed() / 60) > 10:
+                    # Fallback channels are refreshed by the sync thread only
+                    if index < listed and (streamers[index].stream.update_elapsed() / 60) > 10:
                         # Why this user It's currently online but the last updated was more than 10minutes ago?
                         # Please perform a manually update and check if the user it's online
                         self.check_streamer_online(streamers[index])
+
+                listed_index = [index for index in streamers_index if index < listed]
 
                 """
                 Twitch has a limit - you can't watch more than 2 channels at one time.
@@ -577,7 +615,7 @@ class Twitch(object):
 
                     if prior == Priority.ORDER:
                         # Get the first 2 items, they are already in order
-                        streamers_watching.update(streamers_index[:remaining_watch_amount()])
+                        streamers_watching.update(listed_index[:remaining_watch_amount()])
 
                     elif prior in [Priority.POINTS_ASCENDING, Priority.POINTS_DESCENDING]:
                         items = [
@@ -585,7 +623,7 @@ class Twitch(object):
                                 "points": streamers[index].channel_points,
                                 "index": index
                             }
-                            for index in streamers_index
+                            for index in listed_index
                         ]
                         items = sorted(
                             items,
@@ -603,7 +641,7 @@ class Twitch(object):
                         Each stream must be at least 10 minutes long and it must have been at least 30 minutes since the last stream ended.
                         Watch at least 6m for get the +10
                         """
-                        for index in streamers_index:
+                        for index in listed_index:
                             if (
                                 streamers[index].settings.watch_streak is True
                                 and streamers[index].stream.watch_streak_missing is True
@@ -629,12 +667,16 @@ class Twitch(object):
                             for index in streamers_index
                             if streamers[index].drops_condition() is True
                         ]
-                        # Prefer streamers with a drop that can still be finished in time;
-                        # the sort is stable, so the configured order is kept otherwise
+                        # Prefer streamers with a drop that can still be finished in time,
+                        # then listed streamers over fallback channels; the sort is
+                        # stable, so the configured order is kept otherwise
                         drop_streamers.sort(
-                            key=lambda index: not any(
-                                campaign.can_finish()
-                                for campaign in streamers[index].stream.campaigns
+                            key=lambda index: (
+                                not any(
+                                    campaign.can_finish()
+                                    for campaign in streamers[index].stream.campaigns
+                                ),
+                                index >= listed,
                             )
                         )
                         for index in drop_streamers:
@@ -645,7 +687,7 @@ class Twitch(object):
                     elif prior == Priority.SUBSCRIBED:
                         streamers_with_multiplier = [
                             index
-                            for index in streamers_index
+                            for index in listed_index
                             if streamers[index].viewer_has_points_multiplier()
                         ]
                         streamers_with_multiplier = sorted(
@@ -1371,6 +1413,12 @@ class Twitch(object):
                             )
                         )
 
+                if self.drops_fallback is True:
+                    try:
+                        self.__update_drops_fallback(streamers, campaigns)
+                    except Exception as e:  # must never stop campaign syncing
+                        logger.error(f"Error in drops fallback: {e}")
+
             except (
                 ValueError,
                 KeyError,
@@ -1383,6 +1431,185 @@ class Twitch(object):
                 self.__check_connection_handler(chunk_size)
 
             self.__chuncked_sleep(60, chunk_size=chunk_size)
+
+    # === DROPS FALLBACK === #
+    @staticmethod
+    def __drops_fallback_needed(campaign):
+        """True if a drop of the campaign is started, not finished and can still
+        be finished before it ends."""
+        return any(
+            drop.is_claimed is False
+            and 0 < drop.current_minutes_watched < drop.minutes_required
+            and drop.can_finish(campaign.end_at)
+            for drop in campaign.drops
+        )
+
+    @staticmethod
+    def __campaign_progress(campaign):
+        return tuple(drop.current_minutes_watched for drop in campaign.drops)
+
+    def __load_drops_fallback_seen(self):
+        try:
+            with open(self.drops_fallback_file, encoding="utf-8") as f:
+                ids = json.load(f).get("seen_campaigns", [])
+            now = time.time()
+            return {str(campaign_id): now for campaign_id in ids}
+        except (OSError, ValueError, AttributeError, TypeError):
+            return {}
+
+    def __save_drops_fallback_seen(self):
+        temp_file = f"{self.drops_fallback_file}.tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump({"seen_campaigns": sorted(self.drops_fallback_seen)}, f)
+            os.replace(temp_file, self.drops_fallback_file)
+        except OSError as e:
+            logger.warning(f"Could not save {self.drops_fallback_file}: {e}")
+
+    def __update_drops_fallback(self, streamers, campaigns):
+        """Finishes a started drop when its channel goes offline: after
+        drops_fallback_wait minutes without a listed streamer streaming the
+        campaign, watches one other live channel that has it, for drops only.
+        Only campaigns a listed streamer has progressed qualify (kept across
+        restarts in drops_fallback_file; after a restart the wait counts from
+        startup). The channel is released when the campaign no longer needs it, a
+        listed streamer has the campaign again, it goes offline, or Twitch credits
+        no progress for 20 minutes."""
+        if campaigns == []:
+            return  # sync failed or nothing to do; keep the current fallback
+        now = time.time()
+        by_id = {campaign.id: campaign for campaign in campaigns}
+
+        covered = set()
+        new_seen = False
+        for streamer in streamers:
+            if streamer.drops_condition() is True:
+                for campaign in streamer.stream.campaigns:
+                    covered.add(campaign.id)
+                    new_seen = new_seen or campaign.id not in self.drops_fallback_seen
+                    self.drops_fallback_seen[campaign.id] = now
+        if new_seen:
+            self.__save_drops_fallback_seen()
+
+        for streamer in list(self.fallback_streamers):
+            info = self.drops_fallback_info[streamer.username]
+            campaign = by_id.get(info["campaign_id"])
+            reason = None
+            if campaign is None or not self.__drops_fallback_needed(campaign):
+                reason = "the drop is finished"
+            elif campaign.id in covered:
+                reason = "a listed streamer is streaming the campaign again"
+            else:
+                try:
+                    self.check_streamer_online(streamer)
+                    checked = True
+                except Exception as e:  # e.g. the channel was deleted or banned
+                    logger.debug(f"Drops fallback: check of {streamer.username} failed: {e}")
+                    checked = False
+                progress = self.__campaign_progress(campaign)
+                if checked is False:
+                    reason = "its status could not be checked"
+                elif streamer.is_online is False:
+                    reason = "it went offline"
+                elif campaign.id not in streamer.stream.campaigns_ids:
+                    reason = "it no longer has the campaign"
+                elif progress != info["progress"]:
+                    info["progress"] = progress
+                    info["progress_at"] = now
+                elif now - info["progress_at"] > 20 * 60:
+                    reason = "Twitch credited no progress for 20 minutes"
+                    self.drops_fallback_rejected.setdefault(campaign.id, set()).add(
+                        streamer.username
+                    )
+            if reason is None:
+                streamer.stream.campaigns = [campaign]
+                continue
+            self.fallback_streamers.remove(streamer)
+            del self.drops_fallback_info[streamer.username]
+            logger.info(
+                f"Drops fallback: stopped watching {streamer.username}, {reason}"
+            )
+
+        if self.fallback_streamers != []:
+            return  # one fallback channel at a time
+
+        for campaign in campaigns:
+            seen = self.drops_fallback_seen.get(campaign.id)
+            if (
+                seen is None
+                or campaign.id in covered
+                or now - seen < self.drops_fallback_wait * 60
+                or now - self.drops_fallback_searched.get(campaign.id, 0) < 10 * 60
+                or not self.__drops_fallback_needed(campaign)
+            ):
+                continue
+            self.drops_fallback_searched[campaign.id] = now
+            streamer = self.__find_drops_fallback(campaign, streamers)
+            if streamer is None:
+                logger.info(
+                    f"Drops fallback: no other live channel has {campaign.name}"
+                )
+                # Search again in 30 minutes instead of 10
+                self.drops_fallback_searched[campaign.id] = now + 20 * 60
+                continue
+            self.drops_fallback_info[streamer.username] = {
+                "campaign_id": campaign.id,
+                "progress": self.__campaign_progress(campaign),
+                "progress_at": now,
+            }
+            self.fallback_streamers.append(streamer)
+            logger.info(
+                f"Drops fallback: no listed streamer has streamed {campaign.name} "
+                f"for {int((now - seen) // 60)} min, watching {streamer.username} "
+                f"until the drop is finished"
+            )
+            return
+
+    def __find_drops_fallback(self, campaign, streamers, max_checks=5):
+        """Returns a live, not listed channel that has the campaign, or None."""
+        game_id = (campaign.game or {}).get("id")
+        if game_id is None:
+            return None
+        json_data = copy.deepcopy(GQLOperations.DirectoryDropsStreams)
+        json_data["variables"] = {"id": game_id, "first": 20}
+        response = self.post_gql_request(json_data)
+        data = response.get("data") if isinstance(response, dict) else None
+        game = (data or {}).get("game") or {}
+        edges = (game.get("streams") or {}).get("edges") or []
+
+        listed = {streamer.username for streamer in streamers}
+        rejected = self.drops_fallback_rejected.get(campaign.id, set())
+        checks = 0
+        for edge in edges:
+            broadcaster = ((edge or {}).get("node") or {}).get("broadcaster") or {}
+            login = (broadcaster.get("login") or "").lower()
+            channel_id = broadcaster.get("id")
+            if not login or not channel_id or login in listed or login in rejected:
+                continue
+            if checks >= max_checks:
+                break
+            checks += 1
+            settings = StreamerSettings(
+                make_predictions=False,
+                follow_raid=False,
+                claim_drops=True,
+                claim_moments=False,
+                watch_streak=False,
+                community_goals=False,
+                chat=ChatPresence.NEVER,
+            )
+            settings.default()
+            streamer = Streamer(login, settings=settings)
+            streamer.channel_id = channel_id
+            try:
+                self.check_streamer_online(streamer)
+            except Exception as e:
+                logger.debug(f"Drops fallback: skipping {login}: {e}")
+                continue
+            if streamer.is_online and campaign.id in streamer.stream.campaigns_ids:
+                streamer.stream.campaigns = [campaign]
+                return streamer
+        return None
 
     def contribute_to_community_goals(self, streamer):
         # Don't bother doing the request if no goal is currently started or in stock
