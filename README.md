@@ -355,7 +355,7 @@ Campaigns your streamers progressed are remembered in
 
 | Key | Description |
 | :-- | :-- |
-| `priority` | Game names (as shown on Twitch), most wanted first. The first 10 are also searched for new campaigns every 30 minutes |
+| `priority` | Game names (as shown on Twitch), most wanted first. The first 10 are also searched for new campaigns every 15 minutes |
 | `exclude` | Games never watched on other channels |
 | `priority_mode` | `priority_only`: only games in `priority`. `ending_soonest`: all games, `priority` first, then the campaign that ends first. `low_availability`: same, then the campaign with the least spare time. `0`, `1`, `2` also work |
 
